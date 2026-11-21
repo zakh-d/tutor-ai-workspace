@@ -17,8 +17,9 @@ Paths below are relative to `/api/v1`; braces denote UUIDs. `GET collection`, `P
 | Route family | Inputs and operations |
 | --- | --- |
 | `/workspace` | GET settings; PATCH name/timezone. Owner identity is immutable. |
-| `/students` | CRUD; display_name (1–200 chars), contact?, subject?, level?, goals?, notes?. Filters: archived. |
-| `/lessons` | CRUD; student_id, title, plan?, notes?, status, material_ids[]. Filters: student_id/status/archived. Calendar linkage uses the calendar routes. |
+| `/students` | CRUD; display_name (1–200 chars), contact?, subject?, level?, goals?, notes?, timezone? (validated IANA, null/omitted uses workspace). Filters: archived. |
+| `/lessons` | CRUD; student_id, title, plan?, notes?, status, material_ids[], starts_at?/ends_at? (offset-aware pair), timezone? (required for timed lessons). Read-only schedule_id/occurrence_date provenance. Filters: student_id/status/schedule_id/archived. Calendar linkage uses the calendar routes. |
+| `/schedules` | CRUD; student_id, title, weekdays[] (unique 0 Monday–6 Sunday), local_start (HH:MM), timezone (IANA), duration_minutes (integer 1–1440), start_date, end_date? (inclusive dates). Filters: student_id/archived. Server-owned generated_through. POST `/{id}/generate` with `{through_date: date}` and current If-Match. |
 | `/tasks` | CRUD; title, description?, due_at?, status, student_id?, lesson_id?. Filters: student_id/status/due_before/archived. |
 | `/materials` | CRUD metadata; title, description?, tags[], student_ids[], lesson_ids[]. GET `/{id}/versions`; POST `/{id}/versions` multipart upload; GET `/{id}/chunks?artifact_id=&start=&count=`; GET `/{id}/original?version_id=`; POST `/{id}/markdown-corrections` with source_artifact_id and Markdown; POST `/{id}/retry-conversion` with version_id. |
 | `/search` | GET q/types/cursor/limit; returns record metadata, safe excerpt and material artifact/chunk references. |
@@ -68,3 +69,9 @@ Content-Type: application/json
 ```
 
 Public routes and capability request shapes are specified separately in [assignments](assignments.md). Generated OpenAPI must conform to these schemas; REST and MCP schema parity is a release gate.
+
+## Native schedule generation
+
+Generation returns the standard mutation envelope; `data` contains the updated schedule plus `generated_lessons[]` and `skipped_occurrences[]` (`occurrence_date`, `reason`: `nonexistent_local_time` or `ambiguous_local_time`). Scan from start_date or the day after generated_through, at most 93 calendar days per call, clamped by end_date. Persist lessons and watermark atomically; retries replay and overlapping calls never reset moved/cancelled/archived lessons. Rule edits affect only ungenerated dates. Schedule timezone is independent of later student timezone edits. Standard lesson updates move/cancel a local occurrence; linked provider timing must use calendar operations. See [ADR-010](adr/010-student-timezones-and-schedules.md).
+
+Calendar event reads expose safe `lesson_id`/`student_id` associations when linked; `GET /calendar/events/{id}` reads a cached occurrence outside the current timetable range. The public assignment projection includes resolved `teacher_timezone` and `student_timezone` solely for deadline display.

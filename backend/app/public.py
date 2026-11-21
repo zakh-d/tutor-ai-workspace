@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Request, Response, Depends
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from .db import Session, Access, StudentSession, RateBucket, now
+from .db import Session, Access, StudentSession, RateBucket, Workspace, now
 from .auth import Actor
 from .config import settings
 from .errors import require,DomainError
@@ -22,6 +22,9 @@ def rate(db,key,maximum):
 
 def projection(db,access,assignment):
     content=content_for(db,assignment);attempt=get(db,assignment.workspace_id,'submissions',assignment.data['active_attempt_id'])
+    teacher_timezone=db.get(Workspace,assignment.workspace_id).timezone
+    student=get(db,assignment.workspace_id,'students',assignment.data['student_id'])
+    student_timezone=student.data.get('timezone') or teacher_timezone
     questions=[]
     for q in content['questions']:
         public={k:q[k] for k in ('id','type','prompt','points','required')}
@@ -37,7 +40,7 @@ def projection(db,access,assignment):
     for bid in assignment.data['public_attachment_ids']:
         blob=db.scalar(select(Blob).where(Blob.workspace_id==assignment.workspace_id,Blob.id==bid))
         if blob:attachments.append({'id':blob.id,'filename':blob.filename,'size':blob.size,'media_type':blob.media_type})
-    return {'id':assignment.id,'revision':assignment.revision,'title':content['title'],'instructions':content['instructions'],'questions':questions,'attachments':attachments,'due_at':assignment.data.get('due_at'),'expires_at':access.expires_at.isoformat(),'status':assignment.data['status'],'attempt':{k:v for k,v in serialize(attempt).items() if k in ('id','revision','status','answers','files')},'released_result':released}
+    return {'id':assignment.id,'revision':assignment.revision,'title':content['title'],'instructions':content['instructions'],'questions':questions,'attachments':attachments,'due_at':assignment.data.get('due_at'),'student_timezone':student_timezone,'teacher_timezone':teacher_timezone,'expires_at':access.expires_at.isoformat(),'status':assignment.data['status'],'attempt':{k:v for k,v in serialize(attempt).items() if k in ('id','revision','status','answers','files')},'released_result':released}
 
 def session_context(request:Request):
     with Session() as db:

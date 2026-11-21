@@ -1,7 +1,5 @@
 import { request, type Page, type RecordData } from "./api";
-
-const shortDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
-const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+import { plainDateInZone } from "./zoned-time";
 
 const statusNames: Record<string, string> = {
   todo: "To do",
@@ -19,18 +17,13 @@ export function dateValue(value: unknown): Date | undefined {
   if (Number.isFinite(date.getTime())) return date;
 }
 
-export function formatDateTime(value: unknown) {
-  const date = dateValue(value);
-  return date ? dateTime.format(date) : "";
-}
-
-export function describeDue(value: unknown, now = new Date()) {
+export function describeDue(value: unknown, now = new Date(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
   const due = dateValue(value);
   if (!due) return { text: "No due date", overdue: false };
   const overdue = due < now;
-  const relative = due.toDateString() === now.toDateString()
+  const relative = plainDateInZone(due, timeZone) === plainDateInZone(now, timeZone)
     ? "today"
-    : shortDate.format(due);
+    : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", timeZone }).format(due);
   return { text: `${overdue ? "Overdue" : "Due"} ${relative}`, overdue };
 }
 
@@ -60,8 +53,4 @@ export async function loadOpenTasks() {
     ),
   );
   return selectOpenTasks(pages);
-}
-
-export function loadStudentNames() {
-  return request<Page>("/students?archived=false&limit=100");
 }

@@ -1,12 +1,12 @@
 from datetime import datetime, timedelta
 from uuid import UUID
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, Request, Response, UploadFile, File, Form
 from sqlalchemy import select, update
 from .db import Session, Workspace, Record, Revision, Access, Job, now
 from .auth import authenticate
 from .errors import require, DomainError
 from . import schemas as S
+from .scheduling import generate_schedule
 from .service import *
 
 router=APIRouter(prefix='/api/v1')
@@ -39,22 +39,38 @@ def workspace_patch(body:S.WorkspacePatch,request:Request,ctx=Depends(context)):
     op,replay=begin(db,w.id,a,key,'workspace',body.model_dump(mode='json',exclude_unset=True),rev)
     if replay:return replay
     w=db.scalar(select(Workspace).where(Workspace.id==w.id).with_for_update()); expected(w,rev)
-    if body.timezone:
-        try: ZoneInfo(body.timezone)
-        except ZoneInfoNotFoundError: raise DomainError('validation_error','Unknown timezone.')
-        w.timezone=body.timezone
+    if body.timezone:w.timezone=body.timezone
     if body.name:w.name=body.name
     w.revision+=1
     result={'data':{'id':w.id,'name':w.name,'timezone':w.timezone,'revision':w.revision},'revision':w.revision,'operation_id':op.id};op.result=result;return result
+
+def project_lesson_calendar(db, workspace_id, actor, lessons):
+    if 'calendar:read' not in actor.scopes:
+        return
+    links = {lesson['calendar_event_id'] for lesson in lessons if lesson.get('calendar_event_id')}
+    if not links:
+        return
+    events = {event.id: event.data for event in db.scalars(select(Record).where(
+        Record.workspace_id == workspace_id, Record.kind == 'calendar-events', Record.id.in_(links),
+    )) if not event.data.get('deleted')}
+    for lesson in lessons:
+        if event_id := lesson.get('calendar_event_id'):
+            event = events.get(event_id, {})
+            lesson.update(calendar_start=event.get('start'), calendar_end=event.get('end'))
+
 
 def register_crud(kind,schema):
     def collection(request:Request,cursor:str|None=None,limit:int=25,ctx=Depends(context)):
         db,w,a=ctx; a.permit('workspace:read')
         filters={k:v for k,v in request.query_params.items() if k not in ('cursor','limit')}
         if 'archived' in filters: filters['archived']=filters['archived'].lower()=='true'
-        return list_records(db,w.id,kind,limit,cursor,**filters)
+        page=list_records(db,w.id,kind,limit,cursor,**filters)
+        if kind=='lessons': project_lesson_calendar(db,w.id,a,page['items'])
+        return page
     def detail(record_id:UUID,ctx=Depends(context)):
-        db,w,a=ctx;a.permit('workspace:read');return {'data':serialize(get(db,w.id,kind,str(record_id)))}
+        db,w,a=ctx;a.permit('workspace:read');data=serialize(get(db,w.id,kind,str(record_id)))
+        if kind=='lessons': project_lesson_calendar(db,w.id,a,[data])
+        return {'data':data}
     def create(body:schema,request:Request,ctx=Depends(context)):
         db,w,a=ctx;key,_=headers(request); return mutate(db,w.id,a,kind,key,body.model_dump(mode='json'))
     def patch(record_id:UUID,body:dict,request:Request,ctx=Depends(context)):
@@ -66,6 +82,11 @@ def register_crud(kind,schema):
     for fn,method,path in [(collection,'GET',''),(create,'POST',''),(detail,'GET','/{record_id}'),(patch,'PATCH','/{record_id}'),(archive,'POST','/{record_id}/archive'),(restore,'POST','/{record_id}/restore')]:
         router.add_api_route('/'+kind+path,fn,methods=[method],name=kind+'_'+fn.__name__,status_code=201 if fn==create else 200)
 for kind,schema in S.SCHEMAS.items(): register_crud(kind,schema)
+
+@router.post('/schedules/{schedule_id}/generate')
+def schedule_generate(schedule_id:UUID,body:S.GenerateSchedule,request:Request,ctx=Depends(context)):
+    db,w,a=ctx;key,rev=headers(request)
+    return generate_schedule(db,w.id,a,str(schedule_id),key,rev,body.through_date)
 
 @router.get('/assignments')
 def assignment_list(cursor:str|None=None,limit:int=25,student_id:UUID|None=None,ctx=Depends(context)):
@@ -180,9 +201,14 @@ def undo(body:S.Undo,request:Request,ctx=Depends(context)):
     r=get(db,w.id,target.entity_type,target.entity_id,True);expected(r,body.expected_current_revision);expected(r,target.revision);before=snapshot(r)
     if target.before:
         data=target.before['data']
-        if r.kind=='lessons' and data.get('calendar_event_id')!=r.data.get('calendar_event_id'):
-            a.permit('calendar:write')
-            require(not data.get('calendar_event_id'),'undo_not_supported','Relink through the calendar action with both current revisions.')
+        if r.kind=='schedules':
+            require(data.get('generated_through')==r.data.get('generated_through'),'undo_not_supported',
+                    'Manage generated occurrences individually in Lessons.')
+        if r.kind=='lessons':
+            if data.get('calendar_event_id')!=r.data.get('calendar_event_id'):
+                a.permit('calendar:write')
+                require(not data.get('calendar_event_id'),'undo_not_supported','Relink through the calendar action with both current revisions.')
+            validate_lesson_change(r,data)
         validate_refs(db,w.id,r.kind,data);r.data=data;r.archived_at=datetime.fromisoformat(target.before['archived_at']) if target.before['archived_at'] else None
     else:r.archived_at=now()
     r.revision+=1;r.updated_at=now();audit(db,a,op,r,before,target.id);return finish(op,r)

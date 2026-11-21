@@ -22,6 +22,7 @@
 | T14 | Compose boots using one logical PostgreSQL database and separate schemas plus MinIO; migrations, readiness, restart, backup restore, private ports and redacted logs work. No Redis, second database, hosted LLM, or custom identity store. Restored object references resolve. |
 | T15 | Tutor creates student, lesson and task; links materials, filters due tasks, archives/restores and navigates keyboard/mobile forms with recoverable error. Progress shows linked lessons/submissions/released results; no inaccessible student portal implied. |
 | T16 | Tutor creates student and uploads lesson → agent retrieves bounded cited context → authors/publishes homework → student submits quiz/writing/file → agent proposes grade → tutor releases → student views feedback → tutor asks agent to fix an edit through history. Verify provenance, immutable content and authority at every step. |
+| T17 | Set/clear student IANA timezone; reject invalid zones; show teacher/student times across date boundaries and DST in scheduling/deadline flows. Generate Monday/Friday local lessons across DST, replay/overlap safely, reject stale revisions/cross-workspace references, move/cancel/archive one occurrence and regenerate without duplicates or resets. Rule edits affect ungenerated dates only; schedule archival stops generation; DST gaps/overlaps report skipped dates. Google-linked timing cannot be changed locally. |
 
 ## Requirement coverage
 
@@ -30,6 +31,7 @@ Each row names the governing spec, architectural decision, implementation phase 
 | Requirement | Specification | Decision | Backlog phase | Scenarios |
 | --- | --- | --- | --- | --- |
 | F01 Students and progress | [Product](product.md), [model](data-model.md) | [ADR-002](adr/002-storage.md), [ADR-003](adr/003-identity.md) | P1, P4 | T01, T15, T16 |
+| F12 Student timezones and native recurring schedules | [Calendar](calendar.md), [REST](rest-api.md), [model](data-model.md) | [ADR-010](adr/010-student-timezones-and-schedules.md) | P1, P3 | T01, T03, T09, T15, T17 |
 | F02 Lessons and links | [Product](product.md), [model](data-model.md) | [ADR-001](adr/001-monolith.md), [ADR-007](adr/007-calendar.md) | P1, P3 | T09, T15, T16 |
 | F03 Materials/conversion/search | [Materials](materials-and-jobs.md) | [ADR-002](adr/002-storage.md), [ADR-004](adr/004-processing.md) | P2 | T05, T06, T07 |
 | F04 Google timetable/two-way sync | [Calendar](calendar.md) | [ADR-007](adr/007-calendar.md) | P3 | T08, T09 |
@@ -50,4 +52,8 @@ Each row names the governing spec, architectural decision, implementation phase 
 
 ## Documentation review checklist
 
-Verify all relative links resolve; every F01–F11 feature has a row; every ADR and phase is linked; test IDs are unique; accepted/deferred choices are distinguished; interfaces agree on actor authority, mutation preconditions and state transitions. Read through T16 against the contracts, especially lost secret-link responses and grading/undo boundaries. Do not describe these planned scenarios as executed application tests.
+Verify all relative links resolve; every F01–F12 feature has a row; every ADR and phase is linked; test IDs are unique; accepted/deferred choices are distinguished; interfaces agree on actor authority, mutation preconditions and state transitions. Read through T16 against the contracts, especially lost secret-link responses and grading/undo boundaries. Do not describe these planned scenarios as executed application tests.
+
+## Repeatable scheduling gates
+
+CI runs `SCHEDULING_INTEGRATION=1 uv run pytest -q tests/test_scheduling.py` against its migrated PostgreSQL service, in addition to the full unit suite and frontend tests/build. This gate does not require MinIO or Google. Feature-specific tests exercise recurrence, daylight saving boundaries, mutation preconditions and independent occurrence changes; frontend tests exercise conversion and labelled displays. Live provider acceptance remains T08/T09 and requires Google credentials.

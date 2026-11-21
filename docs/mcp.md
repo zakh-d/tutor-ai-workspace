@@ -22,8 +22,11 @@ For families below, each named operation is a separate tool. No unrestricted gen
 | `workspace_search` | q:string, types?:enum[], Page | workspace:read |
 | `students_list`, `students_get` | Page + archived?; or student_id:Id | workspace:read |
 | `students_create`, `students_update`, `students_archive`, `students_restore` | Student fields from REST; update/archive/restore require student_id | workspace:write |
-| `lessons_list`, `lessons_get` | Page + student_id?/status?; or lesson_id | workspace:read |
+| `lessons_list`, `lessons_get` | Page + student_id?/status?/schedule_id?; or lesson_id | workspace:read |
 | `lessons_create`, `lessons_update`, `lessons_archive`, `lessons_restore` | Lesson fields; existing lesson_id | workspace:write |
+| `schedules_list`, `schedules_get` | Page + student_id?/archived?; or schedule_id | workspace:read |
+| `schedules_create`, `schedules_update`, `schedules_archive`, `schedules_restore` | Schedule fields from REST; existing schedule_id and expected_revision for mutations | workspace:write |
+| `schedules_generate` | schedule_id, through_date, expected_revision; shared idempotency_key | workspace:write |
 | `tasks_list`, `tasks_get` | Page + student_id?/status?/due_before?; or task_id | workspace:read |
 | `tasks_create`, `tasks_update`, `tasks_archive`, `tasks_restore` | Task fields; existing task_id | workspace:write |
 | `materials_list`, `materials_get` | Page + student_id?/lesson_id?; or material_id | workspace:read |
@@ -43,6 +46,7 @@ For families below, each named operation is a separate tool. No unrestricted gen
 | `grading_update_proposal` | proposal_id, Assessment | grading:propose |
 | `flashcards_list`, `flashcards_get`, `flashcards_export` | Page; or flashcard_set_id | workspace:read |
 | `flashcards_create`, `flashcards_update`, `flashcards_archive`, `flashcards_restore` | FlashcardContent; existing flashcard_set_id | workspace:write |
+| `calendar_event_get` | event_id | calendar:read |
 | `calendar_status`, `calendar_events_list` | none; or start:Instant,end:Instant + Page | calendar:read |
 | `calendar_create_event` | lesson_id, expected_lesson_revision, title,start,end,timezone | calendar:write |
 | `calendar_reschedule_event` | event_id, expected_etag:string, start,end,timezone | calendar:write |
@@ -84,3 +88,5 @@ For a conflict, reread, compare and submit an intentional new mutation with a ne
 **Flashcards:** retrieve source chunks, write a card set, export TSV and return it to the tutor. Exports are deterministic; generation remains external.
 
 MCP acceptance requires one pinned reference client and at least one real external client passing [validation](validation.md). Record versions and limitations during implementation rather than asserting interoperability now.
+
+Native schedules and optional student/lesson timezone fields use the [REST contract](rest-api.md). Generate concrete bounded lessons before preparing them; move/cancel one lesson with `lessons_update`, preserving schedule provenance. Inspect skipped DST dates and never claim they were scheduled. Google-linked timing continues through calendar operations.

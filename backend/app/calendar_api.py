@@ -101,6 +101,25 @@ def enqueue(db,w,a,key,rev,action,payload):
 @router.post('/sync',status_code=202)
 def sync(request:Request,ctx=Depends(context)):
     db,w,a=ctx;a.permit('calendar:write');key,rev=headers(request);return enqueue(db,w,a,key,rev,'sync',{})
+
+
+def project_event_lessons(db, workspace_id, actor, rows):
+    events = [serialize(row) for row in rows]
+    if not events or 'workspace:read' not in actor.scopes:
+        return events
+    event_id = Record.data['calendar_event_id'].astext
+    links = {key: (lesson_id, student_id) for key, lesson_id, student_id in db.execute(select(
+        event_id, Record.id, Record.data['student_id'].astext,
+    ).where(
+        Record.workspace_id == workspace_id, Record.kind == 'lessons',
+        event_id.in_([event['id'] for event in events]),
+    ))}
+    for event in events:
+        lesson_id, student_id = links.get(event['id'], (None, None))
+        event.update(lesson_id=lesson_id, student_id=student_id)
+    return events
+
+
 @router.get('/events')
 def events(start:AwareDatetime,end:AwareDatetime,limit:int=25,cursor:str|None=None,ctx=Depends(context)):
     db,w,a=ctx;a.permit('calendar:read');require(timedelta(0)<end-start<=timedelta(days=93),'validation_error','Range must be between 0 and 93 days.')
@@ -122,7 +141,16 @@ def events(start:AwareDatetime,end:AwareDatetime,limit:int=25,cursor:str|None=No
     event_end=func.coalesce(Record.data['end']['dateTime'].astext,Record.data['end']['date'].astext).cast(DateTime(timezone=True))
     stmt=select(Record).where(Record.workspace_id==w.id,Record.kind=='calendar-events',func.coalesce(Record.data['deleted'].astext,'false')!='true',Record.data['recurrence'].astext.is_(None),event_end>=start,event_start<=end)
     rows,nxt=page_query(db,stmt,Record,[w.id,'calendar-events',start.isoformat(),end.isoformat()],limit,cursor)
-    return {'items':[serialize(r) for r in rows],'next_cursor':nxt}
+    return {'items':project_event_lessons(db,w.id,a,rows),'next_cursor':nxt}
+
+
+@router.get('/events/{event_id}')
+def event_get(event_id:UUID,ctx=Depends(context)):
+    db,w,a=ctx;a.permit('calendar:read')
+    event=get(db,w.id,'calendar-events',str(event_id))
+    return {'data':project_event_lessons(db,w.id,a,[event])[0]}
+
+
 class EventCreate(BaseModel):
     model_config=ConfigDict(extra='forbid')
     lesson_id:UUID

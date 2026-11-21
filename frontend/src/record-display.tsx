@@ -1,5 +1,7 @@
 import type { RecordData } from "./api";
-import { formatDateTime, formatStatus } from "./overview-data";
+import { formatStatus } from "./overview-data";
+import { ZonedTime } from "./time-fields";
+import { displayTimeValue, isDateOnly } from "./zoned-time";
 
 /** Readable values never serialize transport objects or expose their internal keys. */
 export function readableValue(value: unknown): string {
@@ -13,14 +15,29 @@ export function readableValue(value: unknown): string {
   }
   return "";
 }
-export function RecordSummary({ record }: { record: RecordData }) {
+export function RecordSummary({ record, studentZone }: { record: RecordData; studentZone?: string }) {
   const fields: [string, string][] = [
-    ["status", "Status"], ["due_at", "Due"], ["contact", "Contact"], ["subject", "Subject"], ["level", "Level"],
+    ["status", "Status"], ["timezone", "Timezone"], ["contact", "Contact"], ["subject", "Subject"], ["level", "Level"],
     ["description", "Description"], ["plan", "Lesson plan"], ["goals", "Learning goals"], ["notes", "Private notes"],
-    ["instructions", "Instructions"], ["start", "Starts"], ["end", "Ends"], ["expires_at", "Access expires"], ["tags", "Tags"],
+    ["instructions", "Instructions"], ["tags", "Tags"],
   ];
-  const rows = fields.map(([key, title]) => ({ title, value: key === "status" ? (record[key] ? formatStatus(record[key]) : "") : ["due_at", "start", "end", "expires_at"].includes(key) ? formatDateTime(record[key]) : readableValue(record[key]) })).filter(row => row.value);
-  return rows.length ? <dl className="record-summary">{rows.map(row => <div key={row.title}><dt>{row.title}</dt><dd className="preserve">{row.value}</dd></div>)}</dl> : null;
+  const dateFields: [unknown, string][] = [
+    [record.due_at, "Due"],
+    [record.start ?? (record.calendar_event_id ? record.calendar_start : record.starts_at), "Starts"],
+    [record.end ?? (record.calendar_event_id ? record.calendar_end : record.ends_at), "Ends"],
+    [record.expires_at, "Access expires"],
+  ];
+  const rows = fields.map(([key, title]) => ({
+    title, value: key === "status" ? formatStatus(record[key]) : readableValue(record[key]),
+  })).filter(row => row.value);
+  const dates = dateFields.map(([value, title]) => {
+    const date = displayTimeValue(value);
+    return { value: date, title: title === "Ends" && isDateOnly(date) ? "Ends before" : title };
+  }).filter(row => row.value);
+  return rows.length || dates.length ? <dl className="record-summary">
+    {dates.map(row => <div key={row.title}><dt>{row.title}</dt><dd><ZonedTime value={row.value} studentZone={studentZone} /></dd></div>)}
+    {rows.map(row => <div key={row.title}><dt>{row.title}</dt><dd className="preserve">{row.value}</dd></div>)}
+  </dl> : null;
 }
 type Question = { id: string; prompt: string; type: string; points: number; required?: boolean; options?: { id: string; text: string }[]; rubric?: string; correct_option_id?: string; correct_option_ids?: string[] };
 function contentOf(record: Record<string, unknown>) { return (record.content ?? record) as { questions?: Question[]; cards?: {term: string; definition: string}[]; instructions?: string }; }

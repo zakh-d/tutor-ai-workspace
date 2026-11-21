@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import {
   BookOpen,
   Users,
@@ -20,9 +20,13 @@ import {
 import { request, type RecordData, type Page } from "./api";
 import { initializeAuth, keycloak, authRedirectUri } from "./auth";
 import { canEditAssignment, requireAssignmentIdentity } from "./public-assignment";
-import { dateValue, describeDue, formatDateTime, formatStatus, loadLessonPlans, loadOpenTasks, loadStudentNames } from "./overview-data";
+import { describeDue, formatStatus, loadLessonPlans, loadOpenTasks } from "./overview-data";
 import { RecordSummary, ContentPreview, SubmissionAnswers, readableValue } from "./record-display";
 import { SourceEditor } from "./source-editor";
+import { DateTimeField, TeacherTimezone, TimezoneField, ZonedTime } from "./time-fields";
+import { displayTimeValue, isDateOnly, isTimeZone, resolveDateTime } from "./zoned-time";
+import { effectiveStudentTimezone, useStudentTimezones } from "./student-timezones";
+import { StudentSchedules } from "./student-schedules";
 import { readSection, sectionHref, type WorkspaceSection } from "./workspace-navigation";
 
 const navigationGroups = [
@@ -56,7 +60,7 @@ const navigationGroups = [
 type ResourceIntent = { type: "create" } | { type: "detail"; record: RecordData };
 type Navigate = (section: WorkspaceSection, intent?: ResourceIntent) => void;
 const authSectionKey = "atelier-auth-section";
-const displaySection = (section: WorkspaceSection) => section === "Tasks" ? "My to-dos" : section === "Assignments" ? "Homework" : section;
+const displaySection = (section: WorkspaceSection) => section === "Tasks" ? "My to-dos" : section === "Assignments" ? "Homework" : section === "Calendar" ? "Google Calendar" : section;
 
 const routes: Record<string, string> = {
   Students: "students",
@@ -70,7 +74,7 @@ const routes: Record<string, string> = {
   Calendar: "calendar/events",
 };
 const fields: Record<string, string[]> = {
-  Students: ["display_name", "contact", "subject", "level", "goals", "notes"],
+  Students: ["display_name", "timezone", "contact", "subject", "level", "goals", "notes"],
   Lessons: ["title", "student_id", "plan", "notes", "status", "material_ids"],
   Materials: ["title", "description", "tags", "student_ids", "lesson_ids"],
   Tasks: [
@@ -119,6 +123,9 @@ export function App() {
 function Workspace() {
   const [auth, setAuth] = useState<boolean | null>(null);
   const [authError, setAuthError] = useState("");
+  const [workspace, setWorkspace] = useState<RecordData>();
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [workspaceAttempt, setWorkspaceAttempt] = useState(0);
   const [navigation, setNavigation] = useState<{ section: WorkspaceSection; intent?: ResourceIntent }>(
     () => ({ section: readSection(location.search) }),
   );
@@ -157,6 +164,18 @@ function Workspace() {
     window.addEventListener("popstate", restoreSection);
     return () => window.removeEventListener("popstate", restoreSection);
   }, []);
+
+  useEffect(() => {
+    if (!auth) return;
+    let active = true;
+    request<{ data: RecordData }>("/workspace")
+      .then(({ data }) => {
+        if (typeof data.timezone !== "string" || !isTimeZone(data.timezone)) throw new Error("The workspace timezone is unavailable.");
+        if (active) setWorkspace(data);
+      })
+      .catch(error => { if (active) setWorkspaceError(error.message); });
+    return () => { active = false; };
+  }, [auth, workspaceAttempt]);
 
   const navigate: Navigate = (destination, nextIntent) => {
     if (destination !== section)
@@ -243,13 +262,25 @@ function Workspace() {
         </div>
       </aside>
       <main id="workspace-main" className="workspace-main" ref={main} tabIndex={-1}>
-        {section === "Overview" ? (
-          <Overview navigate={navigate} follow={follow} />
-        ) : section === "Connections" ? (
-          <Connections />
-        ) : (
-          <Resource key={section} section={section} intent={intent} navigate={navigate} />
-        )}
+        {workspace ? (
+          <TeacherTimezone.Provider value={text(workspace.timezone)}>
+            {section === "Overview" ? (
+              <Overview navigate={navigate} follow={follow} />
+            ) : section === "Connections" ? (
+              <Connections workspace={workspace} saveWorkspace={setWorkspace} />
+            ) : (
+              <Resource key={section} section={section} intent={intent} navigate={navigate} />
+            )}
+          </TeacherTimezone.Provider>
+        ) : workspaceError ? (
+          <div className="panel panel-state">
+            <p role="alert">Couldn’t load workspace settings. {workspaceError}</p>
+            <button type="button" className="secondary" onClick={() => {
+              setWorkspaceError("");
+              setWorkspaceAttempt(attempt => attempt + 1);
+            }}>Retry</button>
+          </div>
+        ) : <p role="status">Loading workspace settings…</p>}
       </main>
     </div>
   );
@@ -281,11 +312,13 @@ function Overview({ navigate, follow }: {
 }) {
   const lessons = usePreview(loadLessonPlans);
   const tasks = usePreview(loadOpenTasks);
-  const students = usePreview(loadStudentNames);
-  const studentItems = students.state && "page" in students.state ? students.state.page.items : [];
-  const studentsById = new Map(studentItems.map((student) => [student.id, text(student.display_name)]));
+  const students = useStudentTimezones([
+    ...(lessons.state && "page" in lessons.state ? lessons.state.page.items.slice(0, 5) : []),
+    ...(tasks.state && "page" in tasks.state ? tasks.state.page.items.slice(0, 5) : []),
+  ]);
+  const teacherZone = useContext(TeacherTimezone);
   const now = new Date();
-  const date = new Intl.DateTimeFormat(undefined, { dateStyle: "full" }).format(now);
+  const date = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeZone: teacherZone }).format(now);
   const planLesson = () => navigate("Lessons", { type: "create" });
 
   return (
@@ -304,7 +337,9 @@ function Overview({ navigate, follow }: {
               <span className="record-icon"><GraduationCap size={19} aria-hidden="true" /></span>
               <span className="row-copy">
                 <strong>{text(lesson.title)}</strong>
-                {studentsById.has(text(lesson.student_id)) && <small>{studentsById.get(text(lesson.student_id))}</small>}
+                {students.student(lesson) && <small>{text(students.student(lesson)?.display_name)}</small>}
+                {displayTimeValue(lessonStart(lesson)) &&
+                  <small><ZonedTime value={lessonStart(lesson)} studentZone={students.timezone(lesson)} /></small>}
               </span>
               <span className="badge">{formatStatus(lesson.status)}</span>
               <ChevronRight size={17} aria-hidden="true" />
@@ -316,14 +351,14 @@ function Overview({ navigate, follow }: {
           emptyDescription="Add a private reminder for your next step."
           emptyAction={() => navigate("Tasks", { type: "create" })} emptyActionLabel="Add a to-do">
           {(task) => {
-            const due = describeDue(task.due_at, now);
+            const due = describeDue(task.due_at, now, teacherZone);
             return (
               <button type="button" className="list-row record-button" onClick={() => navigate("Tasks", { type: "detail", record: task })}>
                 <span className="row-copy">
                   <strong>{text(task.title)}</strong>
-                  <small className={due.overdue ? "overdue" : undefined} title={formatDateTime(task.due_at) || undefined}>
-                    {due.text}
-                  </small>
+                  <small className={due.overdue ? "overdue" : undefined}>{due.text}</small>
+                  {displayTimeValue(task.due_at) &&
+                    <small><ZonedTime value={task.due_at} studentZone={students.timezone(task)} /></small>}
                 </span>
                 <span className="badge">{formatStatus(task.status)}</span>
                 <ChevronRight size={17} aria-hidden="true" />
@@ -418,9 +453,12 @@ function recordTitle(record: Record<string, unknown>, fallback = "Record details
   return text(record.display_name ?? record.title ?? (record.content as { title?: string } | undefined)?.title) || fallback;
 }
 
+function lessonStart(lesson: RecordData) {
+  return lesson.calendar_event_id ? lesson.calendar_start : lesson.starts_at;
+}
+
 function Resource({ section, intent, navigate }: { section: WorkspaceSection; intent?: ResourceIntent; navigate: Navigate }) {
   const [rows, setRows] = useState<RecordData[]>([]);
-  const [studentNames, setStudentNames] = useState<Map<string, string>>(new Map());
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<{ message: string; cursor?: string }>();
@@ -447,15 +485,12 @@ function Resource({ section, intent, navigate }: { section: WorkspaceSection; in
     end: new Date(Date.now() + 30 * 86400000).toISOString(),
   });
 
-  useEffect(() => {
-    if (section !== "Assignments") return;
-    let active = true;
-    Promise.all([...new Set(rows.map(row => typeof row.student_id === "string" ? row.student_id : "").filter(Boolean))].map(async id => {
-      const response = await request<{data: RecordData}>(`/students/${id}`);
-      return [id, recordTitle(response.data, "Student unavailable")] as const;
-    })).then(names => {if(active) setStudentNames(new Map(names));}).catch(() => {if(active) setStudentNames(new Map());});
-    return () => {active = false;};
-  }, [rows, section]);
+  const teacherZone = useContext(TeacherTimezone);
+  const studentProfiles = useStudentTimezones([
+    ...(["Lessons", "Tasks", "Calendar", "Assignments"].includes(section) ? rows : []),
+    ...(selected ? [selected] : []),
+  ]);
+
   useEffect(() => {
     if (intent?.type === "detail") openDetail(intent.record);
     else if (intent?.type === "create") setEditor(initial(section));
@@ -657,8 +692,12 @@ function Resource({ section, intent, navigate }: { section: WorkspaceSection; in
         {visible.length > 0 && (
           <div className="records">
             {visible.map((record) => {
-              const due = section === "Tasks" ? describeDue(record.due_at) : null;
-              const summary = section === "Assignments" ? studentNames.get(String(record.student_id)) || "Student unavailable" : text(record.subject ?? record.description ?? record.actor_category);
+              const due = section === "Tasks" ? describeDue(record.due_at, undefined, teacherZone) : null;
+              const summary = section === "Assignments" ? text(studentProfiles.student(record)?.display_name) : text(record.subject ?? record.description ?? record.actor_category);
+              const time = section === "Lessons" ? lessonStart(record) : section === "Calendar" ? record.start :
+                (section === "Tasks" || section === "Assignments") ? record.due_at : undefined;
+              const timeLabel = section === "Assignments" || (section === "Tasks" && record.status === "done") ? "Due" :
+                section === "Lessons" || section === "Calendar" ? "Starts" : "";
               return (
                 <button type="button" className="list-row record-button" key={record.id} onClick={() => openDetail(record)}>
                   <span className="record-icon" aria-hidden="true">
@@ -666,11 +705,10 @@ function Resource({ section, intent, navigate }: { section: WorkspaceSection; in
                   </span>
                   <span className="row-copy">
                     <strong>{recordTitle(record, section === "Assignments" ? "Sent homework" : label(text(record.entity_type) || recordName || "Record"))}</strong>
-                    {due ? (
-                      <small className={due.overdue && record.status !== "done" ? "overdue" : undefined}>
-                        {record.status === "done" && record.due_at ? formatDateTime(record.due_at) : due.text}
-                      </small>
-                    ) : summary && <small>{summary}</small>}
+                    {due && record.status !== "done" && <small className={due.overdue ? "overdue" : undefined}>{due.text}</small>}
+                    {!due && summary && <small>{summary}</small>}
+                    {displayTimeValue(time) &&
+                      <small>{timeLabel && <strong>{timeLabel}</strong>}<ZonedTime value={time} studentZone={studentProfiles.timezone(record)} /></small>}
                   </span>
                   {record.status != null && <span className="badge">{formatStatus(record.status)}</span>}
                   <ChevronRight size={17} aria-hidden="true" />
@@ -703,7 +741,11 @@ function Resource({ section, intent, navigate }: { section: WorkspaceSection; in
               saved={() => { setResult(`${section === "Tasks" ? "To-do" : label(recordName ?? "Record")} saved.`); closeDialog(); void load(); }} />
           ) : selected ? (
             <div className="detail">
-              <RecordSummary record={selected} />
+              <RecordSummary record={section === "Students" ? {
+                ...selected, timezone: selected.timezone ?? `${teacherZone} (teacher timezone)`,
+              } : selected} studentZone={studentProfiles.timezone(selected)} />
+              {section === "Lessons" && Boolean(selected.calendar_event_id) &&
+                <LinkedCalendarEvent id={text(selected.calendar_event_id)} navigate={navigate} />}
               <RelatedRecords record={selected} navigate={navigate} />
               <ContentPreview record={selected} />
               {actionError && <p role="alert" className="error">{actionError}</p>}
@@ -736,11 +778,13 @@ function Resource({ section, intent, navigate }: { section: WorkspaceSection; in
                   </button>
                 </>
               )}
-              {section === "Students" && <StudentProgress student={selected}/>}
+              {section === "Students" && <StudentSchedules student={selected} openLesson={lesson => navigate("Lessons", { type: "detail", record: lesson })} />}
+              {section === "Students" && <StudentProgress student={selected} navigate={navigate} />}
               {section === "Materials" && <MaterialTools material={selected} />}{" "}
               {section === "Calendar" && (
                 <CalendarTools
                   event={selected}
+                  studentZone={studentProfiles.timezone(selected)}
                   refresh={() => {
                     closeDialog();
                     void load();
@@ -750,6 +794,7 @@ function Resource({ section, intent, navigate }: { section: WorkspaceSection; in
               {section === "Assignments" && (
                 <AssignmentReview
                   assignment={selected}
+                  studentZone={studentProfiles.timezone(selected)}
                   refresh={() => {
                     closeDialog();
                     void load();
@@ -872,17 +917,26 @@ function Publish({
   onPublish: (b: unknown) => void;
 }) {
   const [student, setStudent] = useState(""),
-    [due, setDue] = useState("");
+    [due, setDue] = useState(""),
+    [error, setError] = useState("");
+  const teacherZone = useContext(TeacherTimezone);
+  const studentRef = { student_id: student };
+  const studentZone = useStudentTimezones([studentRef]).timezone(studentRef);
   return (
     <form
       className="publish"
       onSubmit={(e) => {
         e.preventDefault();
-        onPublish({
-          student_id: student,
-          ...(due ? { due_at: new Date(due).toISOString() } : {}),
-          public_attachment_ids: [],
-        });
+        setError("");
+        try {
+          onPublish({
+            student_id: student,
+            due_at: resolveDateTime(due, teacherZone),
+            public_attachment_ids: [],
+          });
+        } catch (error) {
+          setError((error as Error).message);
+        }
       }}
     >
       <h3>Send to a student</h3>
@@ -895,14 +949,8 @@ function Publish({
           required
         />
       </label>
-      <label>
-        Due date (optional)
-        <input
-          type="datetime-local"
-          value={due}
-          onChange={(e) => setDue(e.target.value)}
-        />
-      </label>
+      <DateTimeField label="Due date (optional)" value={due} onChange={setDue} studentZone={studentZone} />
+      {error && <p className="error" role="alert">{error}</p>}
       <button type="submit">Send & get private link</button>
       <small>
         A private copy of “{text(template.title)}” will be shared with this student.
@@ -910,13 +958,6 @@ function Publish({
     </form>
   );
 }
-function localDateTime(value: unknown) {
-  const date = dateValue(value);
-  if (!date) return "";
-  const offset = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-}
-
 function Editor({
   section,
   record,
@@ -932,6 +973,12 @@ function Editor({
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const existing = record as RecordData;
+  const teacherZone = useContext(TeacherTimezone);
+  const students = useStudentTimezones([draft]);
+  const student = students.student(draft);
+  const studentZone = students.timezone(draft);
+  const nativeTiming = section === "Lessons" && !existing.calendar_event_id;
+  const lessonZone = (typeof draft.timezone === "string" ? draft.timezone : teacherZone);
   async function save(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
@@ -953,10 +1000,28 @@ function Editor({
           ].includes(field)
         )
           v = typeof v === "string" ? JSON.parse(v) : (v ?? []);
-        if(v===''&&existing.id&& !['title','display_name','instructions'].includes(field)){payload[field]=null;continue;}
-        if (v !== undefined && v !== "")
-          payload[field] =
-            field === "due_at" ? new Date(String(v)).toISOString() : v;
+        if (field === "due_at") {
+          if (v !== undefined) payload[field] = resolveDateTime(text(v), teacherZone);
+          continue;
+        }
+        if (field === "timezone" && v && !isTimeZone(text(v))) throw new Error("Choose a valid IANA timezone.");
+        if (v === "" && existing.id && !["title", "display_name", "instructions"].includes(field)) {
+          payload[field] = null;
+          continue;
+        }
+        if (v !== undefined && v !== "") payload[field] = v;
+      }
+      if (nativeTiming) {
+        const starts = resolveDateTime(text(draft.starts_at), lessonZone);
+        const ends = resolveDateTime(text(draft.ends_at), lessonZone);
+        if (Boolean(starts) !== Boolean(ends)) throw new Error("Enter both a start and an end to schedule the lesson.");
+        if (starts && ends && Date.parse(ends) <= Date.parse(starts)) throw new Error("The end must follow the start.");
+        if (starts || existing.starts_at) {
+          payload.starts_at = starts;
+          payload.ends_at = ends;
+          payload.timezone = starts ? lessonZone : null;
+        }
+        if (existing.schedule_id && !starts) throw new Error("Recurring lessons need a start and end. You can cancel this lesson using its status.");
       }
       await request(
         "/" + routes[section] + (existing.id ? "/" + existing.id : ""),
@@ -983,6 +1048,10 @@ function Editor({
         <fieldset className="editor-fields" disabled={busy}>
         {fields[section].map((field) => {
           const val = draft[field];
+          if (field === "timezone") return <TimezoneField key={field} label="Student timezone" value={text(val)}
+            onChange={timezone => setDraft({ ...draft, timezone })} placeholder={`Use teacher timezone (${teacherZone})`} />;
+          if (field === "due_at") return <DateTimeField key={field} label="Due date" value={text(val)}
+            onChange={due_at => setDraft({ ...draft, due_at })} studentZone={studentZone} />;
           if (field === "tags") return <label key={field}>Tags<input value={Array.isArray(val) ? val.join(", ") : text(val)} onChange={event => setDraft({ ...draft, tags: event.target.value.split(",").map(tag => tag.trim()).filter(Boolean) })} /><small>Separate tags with commas.</small></label>;
           if (field === "source_refs") return <SourceEditor key={field} value={Array.isArray(val) ? val : []} change={value => setDraft({ ...draft, source_refs: value })} />;
           if(field==='contact')return <label key={field}>Contact email<input type="email" value={(val as {email?:string}|null)?.email??''} onChange={e=>setDraft({...draft,contact:e.target.value?{email:e.target.value}:null})}/></label>;
@@ -990,12 +1059,14 @@ function Editor({
             return (
               <label key={field}>
                 {field === "student_id" ? "Student" : "Lesson"}
-                <ReferenceInput
-                  route={field === "student_id" ? "students" : "lessons"}
-                  value={text(val)}
-                  change={(v) => setDraft({ ...draft, [field]: v })}
-                  required={section === "Lessons" && field === "student_id"}
-                />
+                {section === "Lessons" && field === "student_id" && existing.schedule_id ?
+                  <span>{text(student?.display_name) || "Original student"}</span> :
+                  <ReferenceInput
+                    route={field === "student_id" ? "students" : "lessons"}
+                    value={text(val)}
+                    change={(v) => setDraft({ ...draft, [field]: v })}
+                    required={section === "Lessons" && field === "student_id"}
+                  /> }
               </label>
             );
           if (["student_ids", "lesson_ids", "material_ids"].includes(field))
@@ -1033,7 +1104,7 @@ function Editor({
             );
           return (
             <label key={field}>
-              {field === "due_at" ? "Due date" : label(field)}
+              {label(field)}
               {field === "status" ? (
                 <select
                   value={text(
@@ -1070,9 +1141,9 @@ function Editor({
                     ["title", "display_name"].includes(field) ||
                     (section === "Lessons" && field === "student_id")
                   }
-                  type={field === "due_at" ? "datetime-local" : "text"}
+                  type="text"
                   name={field}
-                  value={field === "due_at" ? localDateTime(val) : text(val)}
+                  value={text(val)}
                   onChange={(e) =>
                     setDraft({ ...draft, [field]: e.target.value })
                   }
@@ -1081,6 +1152,14 @@ function Editor({
             </label>
           );
         })}
+        {nativeTiming && <>
+          <TimezoneField label="Lesson timezone" value={lessonZone} onChange={timezone => setDraft({ ...draft, timezone })} required />
+          <DateTimeField label="Start" value={text(draft.starts_at)} onChange={starts_at => setDraft({ ...draft, starts_at })}
+            inputZone={lessonZone} studentZone={studentZone} required={Boolean(existing.schedule_id)} />
+          <DateTimeField label="End" value={text(draft.ends_at)} onChange={ends_at => setDraft({ ...draft, ends_at })}
+            inputZone={lessonZone} studentZone={studentZone} required={Boolean(existing.schedule_id)} />
+        </>}
+        {section === "Lessons" && Boolean(existing.calendar_event_id) && <p>To reschedule this lesson, open its linked Google Calendar event.</p>}
         <div className="actions">
           <button type="submit" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button>
           <button type="button" className="secondary" onClick={close}>
@@ -1104,7 +1183,41 @@ async function download(path: string, name: string) {
   a.click();
   URL.revokeObjectURL(url);
 }
-function Connections() {
+function WorkspaceTimezoneSettings({ workspace, saveWorkspace }: { workspace: RecordData; saveWorkspace: (workspace: RecordData) => void }) {
+  const [timezone, setTimezone] = useState(text(workspace.timezone));
+  const [feedback, setFeedback] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <section className="panel connection">
+      <h2>Workspace timezone</h2>
+      <form onSubmit={async event => {
+        event.preventDefault();
+        setError("");
+        setFeedback("");
+        setBusy(true);
+        try {
+          if (!isTimeZone(timezone)) throw new Error("Choose a valid IANA timezone.");
+          const { data } = await request<{ data: RecordData }>("/workspace", {
+            method: "PATCH", revision: workspace.revision, body: { timezone },
+          });
+          saveWorkspace(data);
+          setFeedback("Teacher timezone saved.");
+        } catch (error) {
+          setError((error as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}>
+        <TimezoneField label="Teacher timezone" value={timezone} onChange={setTimezone} required />
+        <button type="submit" disabled={busy || timezone === workspace.timezone}>Save timezone</button>
+      </form>
+      {feedback && <p role="status">{feedback}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </section>
+  );
+}
+function Connections({ workspace, saveWorkspace }: { workspace: RecordData; saveWorkspace: (workspace: RecordData) => void }) {
   const [error, setError] = useState(""),
     [connection, setConnection] = useState<RecordData | null>(null);
   useEffect(() => {
@@ -1117,6 +1230,7 @@ function Connections() {
       <div className="page-heading">
         <h1>Connections</h1>
       </div>
+      <WorkspaceTimezoneSettings workspace={workspace} saveWorkspace={saveWorkspace} />
       <section className="panel connection">
         <h2>Google Calendar</h2>
         <p>
@@ -1226,6 +1340,8 @@ type PublicData = {
   instructions: string;
   questions: Question[];
   due_at?: string;
+  teacher_timezone?: string;
+  student_timezone?: string;
   status: string;
   attempt: {
     id: string;
@@ -1355,7 +1471,14 @@ function PublicAssignment({ id }: { id: string }) {
             <span className="badge">{data.status !== "open" ? "Closed" : formatStatus(data.attempt.status)}</span>
             <p className="preserve">{data.instructions}</p>
             {data.due_at && (
-              <p><time dateTime={data.due_at}>Due {formatDateTime(data.due_at)}</time></p>
+              <div className="public-due">
+                <strong>Due</strong>
+                {data.teacher_timezone && isTimeZone(data.teacher_timezone) ? (
+                  <TeacherTimezone.Provider value={data.teacher_timezone}>
+                    <ZonedTime value={data.due_at} studentZone={data.student_timezone && isTimeZone(data.student_timezone) ? data.student_timezone : undefined} />
+                  </TeacherTimezone.Provider>
+                ) : <ZonedTime value={data.due_at} studentOnly />}
+              </div>
             )}
           </div>
           {!canEditAssignment(data.status, data.attempt.status) && (
@@ -1875,9 +1998,11 @@ function CardEditor({
 }
 function AssignmentReview({
   assignment,
+  studentZone,
   refresh,
 }: {
   assignment: RecordData;
+  studentZone?: string;
   refresh: () => void;
 }) {
   const [attempts, setAttempts] = useState<RecordData[]>([]),
@@ -1889,6 +2014,8 @@ function AssignmentReview({
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
+  const teacherZone = useContext(TeacherTimezone);
+  const [due, setDue] = useState(text(assignment.due_at));
   useEffect(() => {
     request<Page>(`/assignments/${assignment.id}/submissions`)
       .then((r) => setAttempts(r.items))
@@ -1991,6 +2118,24 @@ function AssignmentReview({
   return (
     <div className="review">
       <h3>Assignment access & review</h3>
+      <form onSubmit={async event => {
+        event.preventDefault();
+        setError("");
+        setBusy(true);
+        try {
+          await request(`/assignments/${assignment.id}`, {
+            method: "PATCH", revision: assignment.revision, body: { due_at: resolveDateTime(due, teacherZone) },
+          });
+          refresh();
+        } catch (error) {
+          setError((error as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}>
+        <DateTimeField label="Due date" value={due} onChange={setDue} studentZone={studentZone} />
+        <button type="submit" className="secondary" disabled={busy || due === text(assignment.due_at)}>Save due date</button>
+      </form>
       {error && (
         <p className="error" role="alert">
           {error}
@@ -2093,10 +2238,16 @@ function AssignmentReview({
   );
 }
 function CalendarEditor({ refresh }: { refresh: () => void }) {
+  const teacherZone = useContext(TeacherTimezone);
   const [open, setOpen] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [operationId, setOperationId] = useState("");
+  const [timezone, setTimezone] = useState(teacherZone);
+  const [lesson, setLesson] = useState<RecordData>();
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const studentZone = useStudentTimezones(lesson ? [lesson] : []).timezone(lesson ?? {});
   async function sync() {
     try {
       const r = await request<{ operation_id: string }>("/calendar/sync", {
@@ -2115,7 +2266,7 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
         <button type="button" className="secondary" onClick={sync}>
           Refresh calendar
         </button>
-        <button type="button" onClick={() => setOpen(!open)}>Schedule a lesson</button>
+        <button type="button" onClick={() => setOpen(!open)}>Add Google Calendar event</button>
       </div>
       {notice && <p className="notice">{notice}</p>}
       {operationId && <OperationMonitor id={operationId} />}
@@ -2130,7 +2281,7 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
             e.preventDefault();
             const f = new FormData(e.currentTarget);
             try {
-              const timezone = String(f.get("timezone"));
+              setError("");
               const r = await request<{ operation_id: string }>(
                 "/calendar/events",
                 {
@@ -2139,9 +2290,7 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
                     title: f.get("title"),
                     lesson_id: f.get("lesson_id"),
                     expected_lesson_revision: Number(f.get("lesson_revision")),
-                    start: new Date(String(f.get("start"))).toISOString(),
-                    end: new Date(String(f.get("end"))).toISOString(),
-                    timezone,
+                    ...calendarTiming(start, end, timezone),
                   },
                 },
               );
@@ -2154,27 +2303,18 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
             }
           }}
         >
-          <LessonFields revisionName="lesson_revision" />
+          <LessonFields revisionName="lesson_revision" change={record => {
+            setLesson(record);
+            setStart(text(record?.starts_at));
+            setEnd(text(record?.ends_at));
+          }} />
           <label>
             Event title
             <input name="title" required />
           </label>
-          <label>
-            Start (your local time)
-            <input name="start" type="datetime-local" required />
-          </label>
-          <label>
-            End (your local time)
-            <input name="end" type="datetime-local" required />
-          </label>
-          <label>
-            Timezone
-            <input
-              name="timezone"
-              defaultValue={Intl.DateTimeFormat().resolvedOptions().timeZone}
-              required
-            />
-          </label>
+          <TimezoneField label="Event timezone" value={timezone} onChange={setTimezone} required />
+          <DateTimeField label="Start" value={start} onChange={setStart} inputZone={timezone} studentZone={studentZone} required />
+          <DateTimeField label="End" value={end} onChange={setEnd} inputZone={timezone} studentZone={studentZone} required />
           <button type="submit">Queue calendar event</button>
         </form>
       )}
@@ -2298,94 +2438,82 @@ function MaterialTools({ material }: { material: RecordData }) {
     </section>
   );
 }
-function CalendarTools({
-  event,
-  refresh,
-}: {
+function calendarTiming(start: string, end: string, timezone: string) {
+  const starts = resolveDateTime(start, timezone);
+  const ends = resolveDateTime(end, timezone);
+  if (!starts || !ends) throw new Error("Enter both a start and an end.");
+  if (Date.parse(ends) <= Date.parse(starts)) throw new Error("The end must follow the start.");
+  return { start: starts, end: ends, timezone };
+}
+
+function CalendarTools({ event, studentZone, refresh }: {
   event: RecordData;
+  studentZone?: string;
   refresh: () => void;
 }) {
-  const [error, setError] = useState(""),
-    [notice, setNotice] = useState(""),
-    [operationId, setOperationId] = useState("");
+  const teacherZone = useContext(TeacherTimezone);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [operationId, setOperationId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const startValue = displayTimeValue(event.start);
+  const endValue = displayTimeValue(event.end);
+  const providerZone = text(event.timezone ?? (event.start as { timeZone?: string } | undefined)?.timeZone);
+  const [timezone, setTimezone] = useState(isTimeZone(providerZone) ? providerZone : teacherZone);
+  const [start, setStart] = useState(startValue);
+  const [end, setEnd] = useState(endValue);
+  const timed = startValue && endValue && !isDateOnly(startValue) && !isDateOnly(endValue);
+
   return (
     <section className="review">
       <h3>Calendar event</h3>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <p className="error" role="alert">{error}</p>}
       {notice && <p className="notice">{notice}</p>}
       {operationId && <OperationMonitor id={operationId} />}
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const f = new FormData(e.currentTarget);
-          try {
-            const r = await request<{ operation_id: string }>(
-              `/calendar/events/${event.id}`,
-              {
-                method: "PATCH",
-                revision: event.revision,
-                body: {
-                  start: new Date(String(f.get("start"))).toISOString(),
-                  end: new Date(String(f.get("end"))).toISOString(),
-                  timezone: f.get("timezone"),
-                  expected_etag: event.etag,
-                },
-              },
-            );
-            setNotice("Time change queued. Waiting for Google confirmation.");
-            setOperationId(r.operation_id);
-          } catch (err) {
-            setError((err as Error).message);
-          }
-        }}
-      >
-        <label>
-          New start (your local time)
-          <input type="datetime-local" name="start" required />
-        </label>
-        <label>
-          New end (your local time)
-          <input type="datetime-local" name="end" required />
-        </label>
-        <label>
-          Timezone
-          <input
-            name="timezone"
-            defaultValue={text(
-              event.timezone ??
-                Intl.DateTimeFormat().resolvedOptions().timeZone,
-            )}
-            required
-          />
-        </label>
-        <button type="submit">Queue reschedule</button>
-      </form>
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const f = new FormData(e.currentTarget);
-          try {
-            await request(`/calendar/events/${event.id}/link`, {
-              method: "POST",
-              revision: event.revision,
-              body: {
-                lesson_id: f.get("lesson_id"),
-                expected_lesson_revision: Number(f.get("revision")),
-              },
-            });
-            refresh();
-          } catch (err) {
-            setError((err as Error).message);
-          }
-        }}
-      >
+      {timed && !event.deleted && <form onSubmit={async (e) => {
+        e.preventDefault();
+        setError("");
+        setSubmitting(true);
+        try {
+          const r = await request<{ operation_id: string }>(`/calendar/events/${event.id}`, {
+            method: "PATCH",
+            revision: event.revision,
+            body: { ...calendarTiming(start, end, timezone), expected_etag: event.etag },
+          });
+          setNotice("Time change queued. Waiting for Google confirmation.");
+          setOperationId(r.operation_id);
+        } catch (err) {
+          setError((err as Error).message);
+        } finally {
+          setSubmitting(false);
+        }
+      }}>
+        <TimezoneField label="Event timezone" value={timezone} onChange={setTimezone} required />
+        <DateTimeField label="New start" value={start} onChange={setStart} inputZone={timezone} studentZone={studentZone} required />
+        <DateTimeField label="New end" value={end} onChange={setEnd} inputZone={timezone} studentZone={studentZone} required />
+        <button type="submit" disabled={submitting}>Queue reschedule</button>
+      </form>}
+      {!event.lesson_id && !event.deleted && <form onSubmit={async (e) => {
+        e.preventDefault();
+        const f = new FormData(e.currentTarget);
+        setError("");
+        try {
+          await request(`/calendar/events/${event.id}/link`, {
+            method: "POST",
+            revision: event.revision,
+            body: {
+              lesson_id: f.get("lesson_id"),
+              expected_lesson_revision: Number(f.get("revision")),
+            },
+          });
+          refresh();
+        } catch (err) {
+          setError((err as Error).message);
+        }
+      }}>
         <LessonFields revisionName="revision" />
         <button type="submit" className="secondary">Link lesson</button>
-      </form>
+      </form>}
     </section>
   );
 }
@@ -2549,7 +2677,66 @@ function OperationMonitor({ id }: { id: string }) {
     </div>
   );
 }
-function StudentProgress({student}:{student:RecordData}){const[records,setRecords]=useState<{kind:string;record:RecordData}[]>([]),[error,setError]=useState('');useEffect(()=>{Promise.all(['lessons','assignments'].map(async kind=>{const r=await request<Page>('/'+kind+'?student_id='+student.id);return r.items.filter(item=>item.student_id===student.id).map(record=>({kind,record}))})).then(rows=>setRecords(rows.flat().sort((a,b)=>text(b.record.created_at).localeCompare(text(a.record.created_at))))).catch(e=>setError(e.message))},[student.id]);return <section className="review"><h3>Learning history</h3>{error&&<p className="error">{error}</p>}{records.length?records.map(({kind,record})=><div className="question-editor" key={record.id}><span className="badge">{kind === "assignments" ? "Sent homework" : "Lesson"}</span><h3>{recordTitle(record,kind === "assignments" ? "Sent homework" : "Lesson")}</h3><p>{formatStatus(record.status)}</p>{record.release_id!=null&&<span className="badge">Results released</span>}</div>):<p>No linked lessons or assignments yet.</p>}</section>}
+function LinkedCalendarEvent({ id, navigate }: { id: string; navigate: Navigate }) {
+  const [event, setEvent] = useState<RecordData>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    request<{ data: RecordData }>(`/calendar/events/${id}`)
+      .then(({ data }) => { if (active) setEvent(data); })
+      .catch(error => { if (active) setError(error.message); });
+    return () => { active = false; };
+  }, [id]);
+  return (
+    <section className="review">
+      <h3>Google Calendar</h3>
+      {error && <p role="alert" className="error">{error}</p>}
+      {Boolean(event?.deleted) && <p>This Google Calendar event was cancelled.</p>}
+      {event && <button type="button" className="secondary" onClick={() => navigate("Calendar", { type: "detail", record: event })}>Open calendar event</button>}
+    </section>
+  );
+}
+
+function StudentProgress({ student, navigate }: { student: RecordData; navigate: Navigate }) {
+  const teacherZone = useContext(TeacherTimezone);
+  const studentZone = effectiveStudentTimezone(student, teacherZone);
+  const [records, setRecords] = useState<{ kind: "Lessons" | "Assignments"; record: RecordData }[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let active = true;
+    Promise.all((["Lessons", "Assignments"] as const).map(async kind => {
+      const page = await request<Page>(`/${routes[kind]}?student_id=${student.id}`);
+      return page.items.map(record => ({ kind, record }));
+    })).then(results => {
+      if (active) setRecords(results.flat().sort((a, b) => text(b.record.created_at).localeCompare(text(a.record.created_at))));
+    }).catch(error => {
+      if (active) setError(error.message);
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [student.id]);
+  return (
+    <section className="review">
+      <h3>Learning history</h3>
+      {error && <p className="error" role="alert">{error}</p>}
+      {loading && <p role="status">Loading learning history…</p>}
+      {!loading && !error && !records.length && <p>No linked lessons or assignments yet.</p>}
+      {records.map(({ kind, record }) => {
+        const assignment = kind === "Assignments";
+        const name = assignment ? "Sent homework" : "Lesson";
+        return <div className="question-editor" key={record.id}>
+          <span className="badge">{name}</span>
+          <h3><button type="button" className="text-button" onClick={() => navigate(kind, { type: "detail", record })}>{recordTitle(record, name)}</button></h3>
+          <p>{formatStatus(record.status)}</p>
+          <ZonedTime value={assignment ? record.due_at : lessonStart(record)} studentZone={studentZone} />
+          {record.release_id != null && <span className="badge">Results released</span>}
+        </div>;
+      })}
+    </section>
+  );
+}
 
 function RelatedRecords({record, navigate}: {record: RecordData; navigate: Navigate}) {
   const [links, setLinks] = useState<{section: WorkspaceSection; record: RecordData}[]>([]), [error, setError] = useState("");
@@ -2567,9 +2754,25 @@ function RelatedRecords({record, navigate}: {record: RecordData; navigate: Navig
   }, [record.id]);
   return links.length || error ? <section className="related-records"><h3>Linked records</h3>{links.map(link => <button type="button" className="text-button" key={link.record.id} onClick={() => navigate(link.section, {type: "detail", record: link.record})}>{recordTitle(link.record)} <small>({displaySection(link.section)})</small></button>)}{error && <p role="status">{error}</p>}</section> : null;
 }
-function LessonFields({revisionName}: {revisionName: string}) {
-  const [lessons, setLessons] = useState<RecordData[]>([]), [selected, setSelected] = useState(""), [error, setError] = useState("");
-  useEffect(() => {request<Page>("/lessons?limit=100").then(page => setLessons(page.items)).catch(error => setError(error.message));}, []);
+function LessonFields({ revisionName, change }: { revisionName: string; change?: (lesson?: RecordData) => void }) {
+  const [lessons, setLessons] = useState<RecordData[]>([]);
+  const [selected, setSelected] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    request<Page>("/lessons?limit=100").then(page => setLessons(page.items)).catch(error => setError(error.message));
+  }, []);
   const lesson = lessons.find(lesson => lesson.id === selected);
-  return <><label>Lesson<select name="lesson_id" required value={selected} onChange={event => setSelected(event.target.value)}><option value="">Choose a lesson</option>{lessons.map(lesson => <option key={lesson.id} value={lesson.id}>{recordTitle(lesson)}</option>)}</select></label><input type="hidden" name={revisionName} value={lesson?.revision ?? ""} />{error && <p role="alert" className="error">{error}</p>}</>;
+  return <>
+    <label>Lesson
+      <select name="lesson_id" required value={selected} onChange={event => {
+        setSelected(event.target.value);
+        change?.(lessons.find(lesson => lesson.id === event.target.value));
+      }}>
+        <option value="">Choose a lesson</option>
+        {lessons.map(lesson => <option key={lesson.id} value={lesson.id}>{recordTitle(lesson)}</option>)}
+      </select>
+    </label>
+    <input type="hidden" name={revisionName} value={lesson?.revision ?? ""} />
+    {error && <p role="alert" className="error">{error}</p>}
+  </>;
 }

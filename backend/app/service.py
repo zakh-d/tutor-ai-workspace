@@ -61,7 +61,7 @@ def finish(op,r,extra=None):
 def validate_refs(db,wid,kind,data):
     for field,k in [('student_id','students'),('lesson_id','lessons')]:
         if data.get(field):
-            r=get(db,wid,k,data[field]); require(not r.archived_at,'invalid_state','Archived records cannot receive new work.')
+            r=get(db,wid,k,data[field],lock=kind=='schedules'); require(not r.archived_at,'invalid_state','Archived records cannot receive new work.')
     if data.get('lesson_id') and data.get('student_id'):
         require(get(db,wid,'lessons',data['lesson_id']).data['student_id']==data['student_id'],'validation_error','Lesson and student do not agree.')
     for field,k in [('material_ids','materials'),('student_ids','students'),('lesson_ids','lessons')]:
@@ -80,6 +80,15 @@ def validated(kind,data):
     try: return SCHEMAS[kind].model_validate(data).model_dump(mode='json')
     except ValidationError as e: raise DomainError('validation_error','Invalid resource.',{'fields':[{'loc':list(x['loc']),'message':x['msg']} for x in e.errors()]})
 
+def validate_lesson_change(lesson, data):
+    if lesson.data.get('schedule_id'):
+        require(data['student_id'] == lesson.data['student_id'], 'invalid_state',
+                'A recurring occurrence belongs to its original student.')
+    if lesson.data.get('calendar_event_id') and any(
+        data.get(field) != lesson.data.get(field) for field in ('starts_at', 'ends_at', 'timezone')
+    ):
+        raise DomainError('invalid_state', 'Reschedule this linked lesson through its calendar event.')
+
 def mutate(db,wid,actor,kind,key,body,rid=None,revision=None,action='save'):
     actor.permit('workspace:write')
     op,replay=begin(db,wid,actor,key,f'{kind}:{rid}:{action}',body,revision)
@@ -89,16 +98,22 @@ def mutate(db,wid,actor,kind,key,body,rid=None,revision=None,action='save'):
         r=get(db,wid,kind,rid,True); expected(r,revision); before=snapshot(r)
         data=dict(r.data)
         if action=='save':
-            # Reject caller attempts to modify server-generated material state.
+            # Preserve server-owned fields and reject attempts to set them directly.
             base={k:v for k,v in data.items() if k in SCHEMAS[kind].model_fields}
             data={**validated(kind,{**base,**body}),**{k:v for k,v in data.items() if k not in SCHEMAS[kind].model_fields}}
+            if kind=='lessons': validate_lesson_change(r,data)
+            if kind=='schedules' and data.get('generated_through'):
+                require(data['student_id']==r.data['student_id'],'invalid_state',
+                        'A schedule with generated history belongs to its original student.')
         elif action=='archive': r.archived_at=now()
         elif action=='restore': r.archived_at=None
         r.revision+=1; r.updated_at=now()
     else:
         data=validated(kind,body)
+        if kind=='schedules': data['generated_through']=None
         r=Record(id=uid(),workspace_id=wid,kind=kind,data=data,revision=1,created_at=now(),updated_at=now()); db.add(r)
-    validate_refs(db,wid,kind,data); r.data=data
+    if kind!='schedules' or action!='archive': validate_refs(db,wid,kind,data)
+    r.data=data
     audit(db,actor,op,r,before)
     return finish(op,r)
 
@@ -133,6 +148,7 @@ def list_records(db,wid,kind,limit=25,cursor=None,**filters):
     for k,v in filters.items():
         if k=='due_before': stmt=stmt.where(Record.data['due_at'].astext.cast(__import__('sqlalchemy').DateTime(timezone=True))<str(v))
         elif k=='student_id' and kind=='materials': stmt=stmt.where(Record.data['student_ids'].contains([str(v)]))
+        elif k=='schedule_id' and kind=='lessons': stmt=stmt.where(Record.data[k].astext==str(v))
         elif k in ('student_id','status','assignment_id'): stmt=stmt.where(Record.data[k].astext==str(v))
         elif k in ('lesson_id',): stmt=stmt.where((Record.data[k].astext==str(v)) | Record.data['lesson_ids'].contains([str(v)]))
         else: raise DomainError('validation_error','Unsupported filter.')

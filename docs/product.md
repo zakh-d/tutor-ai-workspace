@@ -10,8 +10,8 @@ The website must support the full non-generative workflow without an agent. AI g
 
 | ID | Capability and observable behavior |
 | --- | --- |
-| F01 | Students: create/edit/archive a profile with display name, optional contact details, goals, level/subject, and private tutor notes. Show linked lessons, assignments, and released results as progress history. |
-| F02 | Lessons: title, student, plan, private notes, status (planned/completed/cancelled), linked materials and optional calendar occurrence. A lesson may exist before it is scheduled. |
+| F01 | Students: create/edit/archive a profile with display name, optional contact details, goals, level/subject, private tutor notes, and an optional IANA timezone (workspace fallback). Show linked lessons, assignments, and released results as progress history. |
+| F02 | Lessons: title, student, plan, private notes, status (planned/completed/cancelled), linked materials and optional calendar occurrence. A lesson may exist before it is scheduled. Native weekly schedules materialize individual lessons that can be moved or cancelled independently. Student-related times show labelled teacher and student dates/times. |
 | F03 | Materials: upload PDF/PPTX/DOCX/Markdown/text, retain originals and versions, view processing status/warnings, search extracted text, correct extracted Markdown, reuse across students and lessons. |
 | F04 | Calendar: connect one writable Google calendar, view timetable, link existing events, create events, reschedule linked events, refresh, and surface conflicts/disconnection. Google owns event timing. |
 | F05 | Tasks: title, description, optional due instant, todo/in_progress/done status, optional student and lesson links. Filter by status/student/due date. |
@@ -21,6 +21,7 @@ The website must support the full non-generative workflow without an agent. AI g
 | F09 | Flashcards: tutor/agent creates and edits term–definition sets, optionally linked to lesson/materials, and downloads Quizlet-importable TSV. |
 | F10 | Recovery: show human/agent provenance, compare revisions, restore supported local changes, and report conflicts or irreversible external effects. |
 | F11 | MCP: authorized external agents discover/read bounded context and perform scoped mutations, publication, calendar changes and undo; never release grades. |
+| F12 | Student timezone and native weekly schedules: show teacher/student dates and times, generate bounded concrete lessons, and move or cancel individual occurrences without changing the recurring agreement. |
 
 ## Main journeys
 
@@ -39,6 +40,6 @@ Forms preserve input on recoverable failures. Pending calendar and conversion op
 
 ## Deferred
 
-Teams/shared workspaces, Microsoft/Teams integration, payments, student accounts, email/SMS invitations, automated reminders, server-side LLMs, OCR, image/diagram reasoning, mathematical layout fidelity, semantic/vector search, recurrence series editing, group lessons, student file OCR, advanced gradebooks and analytics. The MVP progress view is an activity/result history, not an inferred mastery model.
+Teams/shared workspaces, Microsoft/Teams integration, payments, student accounts, email/SMS invitations, automated reminders, server-side LLMs, OCR, image/diagram reasoning, mathematical layout fidelity, semantic/vector search, Google recurrence series editing, group lessons, student file OCR, advanced gradebooks and analytics. The MVP progress view is an activity/result history, not an inferred mastery model.
 
 Acceptance scenarios and requirement coverage are in [validation](validation.md); rollout ordering is in the [backlog](backlog.md).

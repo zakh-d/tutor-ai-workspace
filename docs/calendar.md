@@ -1,5 +1,11 @@
 # Google Calendar integration
 
+## Native weekly schedules
+
+[ADR-010](adr/010-student-timezones-and-schedules.md) extends the Google-only scheduling boundary: a tutor can save a weekly student agreement and explicitly generate up to 93 days of local lessons without connecting Google. Recurrence is anchored to its chosen IANA timezone, not a fixed UTC offset. Generated lessons can be moved or cancelled individually; regeneration never resets them. Schedule edits affect only ungenerated dates and archival preserves lessons. DST gaps/overlaps are skipped with visible dates/reasons; create an explicit-offset one-off when required. Teacher and student dates/times are labelled separately throughout student-related time flows.
+
+Google remains authoritative for linked provider events; native schedules do not automatically create provider series or events.
+
 ## Connection and ownership
 
 Tutor connects Google separately from Keycloak login using server-side authorization-code exchange, CSRF state and exact callback URI. Request calendar-list read access and event access needed for the selected writable calendar; document the Google consent scopes in deployment setup. Encrypt refresh/access credentials in PostgreSQL, never expose them to MCP or history. One selected writable calendar per workspace. Calendar selection and account consent happen in the website.

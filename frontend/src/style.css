@@ -459,3 +459,17 @@ nav { margin-top: 16px; }
   .homework-workflow ol { display: block; }
   .homework-workflow li + li { margin-top: 6px; }
 }
+
+.zoned-time { display: block; }
+.zoned-time time { display: block; overflow-wrap: anywhere; }
+.row-copy small:has(.zoned-time) { display: block; overflow: visible; }
+.row-copy small > strong { display: inline; }
+.time-field > small { display: block; margin: 0 0 12px; }
+.public-due { margin-top: 16px; }
+.schedule-form h4, .schedule-card h4 { margin: 0 0 8px; }
+.schedule-card p { margin: 6px 0; }
+.schedule-weekdays { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 14px 0; }
+.schedule-weekdays label { margin: 0; }
+.schedule-result { margin-top: 12px; }
+.schedule-occurrence { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.schedule-occurrence .badge { margin-left: 8px; }

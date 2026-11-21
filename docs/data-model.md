@@ -11,8 +11,9 @@ A workspace is uniquely owned by `(issuer, subject)` from a verified Keycloak to
 | Entity | Fields and relationships |
 | --- | --- |
 | Workspace | Owner issuer/subject, name, timezone; one per tutor. |
-| Student | Display name, optional contact JSON (email/phone), subject, level, goals and private notes. |
-| Lesson | Student ID, title, plan Markdown, private notes Markdown, planned/completed/cancelled status; optional unique calendar event link. |
+| Student | Display name, optional contact JSON (email/phone), subject, level, goals, private notes and optional IANA timezone (workspace fallback). |
+| Lesson | Student ID, title, plan Markdown, private notes Markdown, planned/completed/cancelled status; optional local starts_at/ends_at/timezone, immutable schedule_id/occurrence_date provenance, optional unique calendar event link. |
+| Schedule | Student ID, title, weekdays (0 Monday–6 Sunday), local_start, IANA timezone, duration_minutes, inclusive start_date/end_date, server-owned generated_through; revisioned and archivable. |
 | Task | Title, description, due_at, todo/in_progress/done status, nullable student_id/lesson_id; if both supplied they must agree. |
 | Material | Title, description, tags, active material-version ID; student/lesson join tables allow reuse. |
 | MaterialVersion | Material ID, immutable original object ID, format, conversion state, extracted-artifact ID, warnings, converter version; replacement upload creates a new version. |

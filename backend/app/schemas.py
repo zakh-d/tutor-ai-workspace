@@ -1,7 +1,41 @@
 from typing import Annotated, Literal, Any
 from uuid import UUID
-from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field, model_validator, AwareDatetime
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator, AwareDatetime
+
+
+def iana_timezone(value: str) -> str:
+    if value in {'localtime', 'posixrules'} or value.startswith(('posix/', 'right/')):
+        raise ValueError('Unknown IANA timezone')
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError('Unknown IANA timezone') from exc
+    return value
+
+
+def calendar_date(value):
+    if isinstance(value, str) and len(value) == 10:
+        parsed = date.fromisoformat(value)
+        if parsed.isoformat() == value:
+            return parsed
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    raise ValueError('Use a calendar date in YYYY-MM-DD format')
+
+
+def utc_instant(value: datetime) -> datetime:
+    try:
+        return value.astimezone(timezone.utc)
+    except OverflowError as exc:
+        raise ValueError('Timestamp is outside the supported range') from exc
+
+
+IanaTimezone = Annotated[str, Field(min_length=1, max_length=100), AfterValidator(iana_timezone)]
+CalendarDate = Annotated[date, BeforeValidator(calendar_date)]
+LessonInstant = Annotated[AwareDatetime, AfterValidator(utc_instant)]
+Weekday = Annotated[int, Field(strict=True, ge=0, le=6)]
 
 class Strict(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -12,6 +46,7 @@ class Student(Strict):
     level: str|None=None
     goals: str|None=None
     notes: str|None=None
+    timezone: IanaTimezone|None=None
 class Lesson(Strict):
     student_id: UUID
     title: str=Field(min_length=1,max_length=200)
@@ -19,6 +54,44 @@ class Lesson(Strict):
     notes: str|None=None
     status: Literal['planned','completed','cancelled']='planned'
     material_ids: list[UUID]=Field(default_factory=list,max_length=100)
+    starts_at: LessonInstant|None=None
+    ends_at: LessonInstant|None=None
+    timezone: IanaTimezone|None=None
+
+    @model_validator(mode='after')
+    def validate_timing(self):
+        if self.starts_at is None and self.ends_at is None and self.timezone is None:
+            return self
+        if self.starts_at is None or self.ends_at is None or self.timezone is None:
+            raise ValueError('Provide starts_at, ends_at and timezone together')
+        if self.ends_at <= self.starts_at:
+            raise ValueError('Lesson end must follow its start')
+        return self
+
+
+class Schedule(Strict):
+    student_id: UUID
+    title: str = Field(min_length=1, max_length=200)
+    weekdays: list[Weekday] = Field(min_length=1, max_length=7)
+    local_start: str = Field(pattern=r'^(?:[01][0-9]|2[0-3]):[0-5][0-9]$')
+    timezone: IanaTimezone
+    duration_minutes: int = Field(strict=True, ge=1, le=1440)
+    start_date: CalendarDate
+    end_date: CalendarDate|None = None
+
+    @model_validator(mode='after')
+    def validate_rule(self):
+        if len(set(self.weekdays)) != len(self.weekdays):
+            raise ValueError('Weekdays must be unique')
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError('Schedule end date must be on or after its start date')
+        return self
+
+
+class GenerateSchedule(Strict):
+    through_date: CalendarDate
+
+
 class Task(Strict):
     title: str=Field(min_length=1,max_length=200)
     description: str|None=None
@@ -127,6 +200,6 @@ class Markdown(Strict):
 class RetryConversion(Strict): version_id: UUID
 class WorkspacePatch(Strict):
     name: str|None=Field(default=None,min_length=1,max_length=200)
-    timezone: str|None=None
+    timezone: IanaTimezone|None=None
 
-SCHEMAS={'students':Student,'lessons':Lesson,'tasks':Task,'materials':Material,'homework-templates':Homework,'flashcard-sets':Flashcards}
+SCHEMAS={'students':Student,'lessons':Lesson,'schedules':Schedule,'tasks':Task,'materials':Material,'homework-templates':Homework,'flashcard-sets':Flashcards}
