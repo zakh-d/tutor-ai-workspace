@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import {
   BookOpen,
   Users,
@@ -13,24 +13,50 @@ import {
   Search,
   LogOut,
   ChevronRight,
-  Sparkles,
+  Settings,
+  Menu,
+  X,
 } from "lucide-react";
 import { request, type RecordData, type Page } from "./api";
 import { initializeAuth, keycloak, authRedirectUri } from "./auth";
 import { canEditAssignment, requireAssignmentIdentity } from "./public-assignment";
-const sections = [
-  ["Overview", BookOpen],
-  ["Students", Users],
-  ["Lessons", GraduationCap],
-  ["Materials", Files],
-  ["Tasks", CheckSquare],
-  ["Homework", BookOpen],
-  ["Assignments", CheckSquare],
-  ["Calendar", CalendarDays],
-  ["Flashcards", Layers],
-  ["Activity", History],
-  ["Connections", Sparkles],
+import { dateValue, describeDue, formatDateTime, formatStatus, loadLessonPlans, loadOpenTasks, loadStudentNames } from "./overview-data";
+import { readSection, sectionHref, type WorkspaceSection } from "./workspace-navigation";
+
+const navigationGroups = [
+  {
+    label: "Workspace",
+    sections: [
+      ["Overview", BookOpen],
+      ["Students", Users],
+      ["Lessons", GraduationCap],
+      ["Calendar", CalendarDays],
+      ["Tasks", CheckSquare],
+    ],
+  },
+  {
+    label: "Teaching resources",
+    sections: [
+      ["Materials", Files],
+      ["Homework", BookOpen],
+      ["Assignments", CheckSquare],
+      ["Flashcards", Layers],
+    ],
+  },
+  {
+    label: "Administration",
+    sections: [
+      ["Activity", History],
+      ["Connections", Settings],
+    ],
+  },
 ] as const;
+
+type ResourceIntent = { type: "create" } | { type: "detail"; record: RecordData };
+type Navigate = (section: WorkspaceSection, intent?: ResourceIntent) => void;
+const authSectionKey = "atelier-auth-section";
+const authSessionKey = "atelier-session-available";
+
 const routes: Record<string, string> = {
   Students: "students",
   Lessons: "lessons",
@@ -91,296 +117,445 @@ export function App() {
   return publicId ? <PublicAssignment id={publicId} /> : <Workspace />;
 }
 function Workspace() {
-  const [auth, setAuth] = useState<boolean | null>(null),
-    [authError, setAuthError] = useState("");
-  const [section, setSection] = useState("Overview");
+  const [auth, setAuth] = useState<boolean | null>(null);
+  const [authError, setAuthError] = useState("");
+  const [navigation, setNavigation] = useState<{ section: WorkspaceSection; intent?: ResourceIntent }>(
+    () => ({ section: readSection(location.search) }),
+  );
+  const [menuOpen, setMenuOpen] = useState(false);
+  const main = useRef<HTMLElement>(null);
+  const menu = useRef<HTMLButtonElement>(null);
+  const { section, intent } = navigation;
+
   useEffect(() => {
-    initializeAuth()
-      .then(setAuth)
+    const directSection = readSection(location.search);
+    const callback = new URLSearchParams(location.hash.slice(1));
+    const isCallback = callback.has("state") && (callback.has("code") || callback.has("error"));
+    const resumeSession = sessionStorage.getItem(authSessionKey) === "true";
+    if (resumeSession && !isCallback) {
+      sessionStorage.setItem(authSectionKey, sectionHref(directSection));
+    }
+    initializeAuth(resumeSession)
+      .then((signedIn) => {
+        const pendingHref = sessionStorage.getItem(authSectionKey);
+        sessionStorage.removeItem(authSectionKey);
+        if (isCallback && pendingHref) {
+          const restored = readSection(new URL(pendingHref, location.origin).search);
+          history.replaceState(history.state, "", sectionHref(restored));
+          setNavigation({ section: restored });
+        }
+        if (signedIn) sessionStorage.setItem(authSessionKey, "true");
+        else sessionStorage.removeItem(authSessionKey);
+        setAuth(signedIn);
+      })
       .catch((e) => setAuthError(e.message));
   }, []);
-  if (auth === null || !auth)
-    return (
-      <div className="login">
-        <div className="brand">
-          <BookOpen /> atelier<span>tutor workspace</span>
-        </div>
-        <div className="login-card">
-          <span className="eyebrow">ROOM TO GROW</span>
-          <h1>
-            Good teaching starts
-            <br />
-            with a little space.
-          </h1>
-          <p>
-            Your students, lesson plans, and the next small breakthrough. All
-            together.
-          </p>
-          {authError ? (
-            <p role="alert" className="error">
-              Sign-in unavailable: {authError}
-            </p>
-          ) : auth === null ? (
-            <p>Connecting securely…</p>
-          ) : (
-            <button
-              onClick={() => keycloak.login({ redirectUri: authRedirectUri })}
-            >
-              Sign in to your workspace <ArrowUpRight size={17} />
-            </button>
-          )}
-          <small>Secure sign-in with Keycloak</small>
-        </div>
-      </div>
-    );
+
+  useEffect(() => {
+    const restoreSection = () => {
+      setMenuOpen(false);
+      setNavigation({ section: readSection(location.search) });
+      requestAnimationFrame(() => main.current?.focus());
+    };
+    window.addEventListener("popstate", restoreSection);
+    return () => window.removeEventListener("popstate", restoreSection);
+  }, []);
+
+  const navigate: Navigate = (destination, nextIntent) => {
+    if (destination !== section)
+      history.pushState(null, "", sectionHref(destination));
+    setMenuOpen(false);
+    setNavigation({ section: destination, intent: nextIntent });
+    if (!nextIntent) requestAnimationFrame(() => main.current?.focus());
+  };
+  function follow(event: MouseEvent<HTMLAnchorElement>, destination: WorkspaceSection) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    navigate(destination);
+  }
+  function signIn() {
+    sessionStorage.setItem(authSectionKey, sectionHref(section));
+    keycloak.login({ redirectUri: authRedirectUri }).catch((e) => setAuthError(e.message));
+  }
+  function signOut() {
+    sessionStorage.removeItem(authSessionKey);
+    sessionStorage.removeItem(authSectionKey);
+    void keycloak.logout({ redirectUri: authRedirectUri });
+  }
+
+  if (!auth) return (
+    <main className="login">
+      <div className="brand"><BookOpen aria-hidden="true" /> Atelier</div>
+      <section className="panel login-card">
+        <h1>Tutor workspace</h1>
+        {authError ? (
+          <p role="alert" className="error">Sign-in unavailable. {authError}</p>
+        ) : auth === null ? (
+          <p role="status">Connecting securely…</p>
+        ) : (
+          <button onClick={signIn}>Sign in <ArrowUpRight size={17} aria-hidden="true" /></button>
+        )}
+      </section>
+    </main>
+  );
+
   return (
     <div className="shell">
-      <aside>
-        <a className="brand" href="/">
-          <BookOpen /> atelier
-        </a>
-        <div className="workspace-label">YOUR WORKSPACE</div>
-        <nav>
-          {sections.map(([name, Icon]) => (
-            <button
-              key={name}
-              className={section === name ? "active" : ""}
-              onClick={() => setSection(name)}
-            >
-              <Icon size={19} />
-              {name}
-              {section === name && <span className="nav-dot" />}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <span className="avatar">
-            {(keycloak.tokenParsed?.preferred_username ?? "T")
-              .slice(0, 1)
-              .toUpperCase()}
-          </span>
-          <div>
-            <strong>
-              {keycloak.tokenParsed?.preferred_username ?? "Tutor"}
-            </strong>
-            <small>Personal workspace</small>
-          </div>
-          <button
-            aria-label="Sign out"
-            onClick={() => keycloak.logout({ redirectUri: authRedirectUri })}
-          >
-            <LogOut size={17} />
+      <a className="skip-link" href="#workspace-main">Skip to main content</a>
+      <aside className={menuOpen ? "rail menu-open" : "rail"}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && menuOpen) {
+            setMenuOpen(false);
+            menu.current?.focus();
+          }
+        }}
+      >
+        <div className="rail-heading">
+          <a className="brand" href="/" onClick={(event) => follow(event, "Overview")}>
+            <BookOpen aria-hidden="true" /> Atelier
+          </a>
+          <button className="secondary menu-toggle" ref={menu} aria-expanded={menuOpen}
+            aria-controls="workspace-navigation" onClick={() => setMenuOpen(!menuOpen)}>
+            {menuOpen ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
+            Menu
           </button>
         </div>
+        <div className="rail-content" id="workspace-navigation">
+          <nav aria-label="Workspace">
+            {navigationGroups.map((group) => (
+              <div className="nav-group" key={group.label}>
+                <p>{group.label}</p>
+                <ul>
+                  {group.sections.map(([name, Icon]) => (
+                    <li key={name}>
+                      <a href={sectionHref(name)} aria-current={section === name ? "page" : undefined}
+                        onClick={(event) => follow(event, name)}>
+                        <Icon size={18} aria-hidden="true" />{name}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </nav>
+          <div className="rail-account">
+            <strong>{keycloak.tokenParsed?.preferred_username ?? "Tutor"}</strong>
+            <button className="text-button" onClick={signOut}>
+              <LogOut size={17} aria-hidden="true" />Sign out
+            </button>
+          </div>
+        </div>
       </aside>
-      <div className="main">
-        <header>
-          <span>
-            Workspace <ChevronRight size={14} /> {section}
-          </span>
-          <span className="today">
-            {new Date().toLocaleDateString("en", {
-              weekday: "long",
-              month: "long",
-              day: "numeric",
-            })}
-          </span>
-        </header>
-        <main>
-          {section === "Overview" ? (
-            <Overview navigate={setSection} />
-          ) : section === "Connections" ? (
-            <Connections />
-          ) : (
-            <Resource key={section} section={section} />
-          )}
-        </main>
-        <footer>
-          MADE FOR THE WAY YOU TEACH <span>One lesson at a time.</span>
-        </footer>
-      </div>
+      <main id="workspace-main" className="workspace-main" ref={main} tabIndex={-1}>
+        {section === "Overview" ? (
+          <Overview navigate={navigate} follow={follow} />
+        ) : section === "Connections" ? (
+          <Connections />
+        ) : (
+          <Resource key={section} section={section} intent={intent} />
+        )}
+      </main>
     </div>
   );
 }
-function Overview({ navigate }: { navigate: (s: string) => void }) {
-  const [data, setData] = useState<Record<string, RecordData[]>>({}),
-    [error, setError] = useState("");
+
+function usePreview(fetchPage: () => Promise<Page>) {
+  type State = { page: Page } | { error: string };
+  const [state, setState] = useState<State>();
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    Promise.all(
-      ["students", "lessons", "tasks", "materials"].map(
-        async (path) =>
-          [path, (await request<Page>("/" + path)).items] as const,
-      ),
-    )
-      .then((entries) => setData(Object.fromEntries(entries)))
-      .catch((e) => setError(e.message));
-  }, []);
+    let active = true;
+    fetchPage()
+      .then((page) => { if (active) setState({ page }); })
+      .catch((error: Error) => { if (active) setState({ error: error.message }); });
+    return () => { active = false; };
+  }, [fetchPage, attempt]);
+  return {
+    state,
+    retry() {
+      setState(undefined);
+      setAttempt((current) => current + 1);
+    },
+  };
+}
+
+function Overview({ navigate, follow }: {
+  navigate: Navigate;
+  follow: (event: MouseEvent<HTMLAnchorElement>, section: WorkspaceSection) => void;
+}) {
+  const lessons = usePreview(loadLessonPlans);
+  const tasks = usePreview(loadOpenTasks);
+  const students = usePreview(loadStudentNames);
+  const studentItems = students.state && "page" in students.state ? students.state.page.items : [];
+  const studentsById = new Map(studentItems.map((student) => [student.id, text(student.display_name)]));
+  const now = new Date();
+  const date = new Intl.DateTimeFormat(undefined, { dateStyle: "full" }).format(now);
+  const planLesson = () => navigate("Lessons", { type: "create" });
+
   return (
     <>
       <div className="page-heading">
-        <div>
-          <span className="eyebrow">A LITTLE CLARITY FOR YOUR DAY</span>
-          <h1>Your teaching, in focus.</h1>
-          <p>Make room for the work that matters.</p>
-        </div>
-        <button onClick={() => navigate("Lessons")}>
-          <Plus size={17} /> Plan a lesson
-        </button>
-      </div>
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-      <div className="stats">
-        {[
-          ["Students", "students", "Learning journeys"],
-          ["Lessons", "lessons", "Plans taking shape"],
-          ["Tasks", "tasks", "Things to move forward"],
-          ["Materials", "materials", "Ideas to build on"],
-        ].map(([title, key, note]) => (
-          <button className="stat" key={key} onClick={() => navigate(title)}>
-            <span>
-              {title}
-              <ArrowUpRight size={17} />
-            </span>
-            <strong>{data[key]?.length ?? "—"}</strong>
-            <small>{note}</small>
-          </button>
-        ))}
+        <div><h1>Overview</h1><p>{date}</p></div>
+        <button onClick={planLesson}><Plus size={18} aria-hidden="true" />Plan a lesson</button>
       </div>
       <div className="overview-grid">
-        <section className="panel">
-          <div className="panel-title">
-            <h2>On your lesson desk</h2>
-            <button className="text-button" onClick={() => navigate("Lessons")}>
-              View lessons <ArrowUpRight size={15} />
+        <PreviewPanel title="Lesson plans" destination="Lessons" preview={lessons}
+          follow={follow} emptyTitle="No planned lessons"
+          emptyDescription="Start a lesson plan for a student."
+          emptyAction={planLesson} emptyActionLabel="Plan a lesson">
+          {(lesson) => (
+            <button className="list-row record-button" onClick={() => navigate("Lessons", { type: "detail", record: lesson })}>
+              <span className="record-icon"><GraduationCap size={19} aria-hidden="true" /></span>
+              <span className="row-copy">
+                <strong>{text(lesson.title)}</strong>
+                {studentsById.has(text(lesson.student_id)) && <small>{studentsById.get(text(lesson.student_id))}</small>}
+              </span>
+              <span className="badge">{formatStatus(lesson.status)}</span>
+              <ChevronRight size={17} aria-hidden="true" />
             </button>
-          </div>
-          {data.lessons?.length ? (
-            data.lessons.slice(0, 5).map((r) => (
-              <div className="list-row" key={r.id}>
-                <span className="record-icon">
-                  <GraduationCap size={20} />
-                </span>
-                <div>
-                  <strong>{text(r.title)}</strong>
-                  <small>{text(r.status)}</small>
-                </div>
-                <ChevronRight size={17} />
-              </div>
-            ))
-          ) : (
-            <Empty
-              icon="✧"
-              title="A fresh page for your next lesson"
-              description="Turn your ideas into a plan, then bring your materials together."
-              action={() => navigate("Lessons")}
-              actionLabel="Create a lesson"
-            />
           )}
-        </section>
-        <section className="panel warm">
-          <span className="eyebrow">SMALL STEPS, STEADY PROGRESS</span>
-          <h2>What’s next?</h2>
-          <p>A clear next step makes a little more room for your students.</p>
-          {data.tasks
-            ?.filter((r) => r.status !== "done")
-            .slice(0, 4)
-            .map((r) => (
-              <div className="task-preview" key={r.id}>
-                <CheckSquare size={18} />
-                {text(r.title)}
-              </div>
-            ))}
-          <button className="secondary" onClick={() => navigate("Tasks")}>
-            Open your task list <ArrowUpRight size={16} />
-          </button>
-        </section>
+        </PreviewPanel>
+        <PreviewPanel title="Open tasks" destination="Tasks" preview={tasks}
+          follow={follow} emptyTitle="No open tasks"
+          emptyDescription="Add a task to keep track of your next step."
+          emptyAction={() => navigate("Tasks", { type: "create" })} emptyActionLabel="Add a task">
+          {(task) => {
+            const due = describeDue(task.due_at, now);
+            return (
+              <button className="list-row record-button" onClick={() => navigate("Tasks", { type: "detail", record: task })}>
+                <span className="row-copy">
+                  <strong>{text(task.title)}</strong>
+                  <small className={due.overdue ? "overdue" : undefined} title={formatDateTime(task.due_at) || undefined}>
+                    {due.text}
+                  </small>
+                </span>
+                <span className="badge">{formatStatus(task.status)}</span>
+                <ChevronRight size={17} aria-hidden="true" />
+              </button>
+            );
+          }}
+        </PreviewPanel>
       </div>
-      <section className="quick-start">
-        <div>
-          <span className="eyebrow">CONNECTED, ON YOUR TERMS</span>
-          <h2>Your assistant. Your workspace.</h2>
-          <p>
-            Connect an external AI agent to help prepare lessons and organize
-            your teaching.
-          </p>
-        </div>
-        <button className="secondary" onClick={() => navigate("Connections")}>
-          Explore connections <ArrowUpRight size={16} />
-        </button>
-      </section>
     </>
   );
 }
-function Empty({
-  icon,
-  title,
-  description,
-  action,
-  actionLabel,
-}: {
-  icon: string;
+
+function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDescription, emptyAction, emptyActionLabel, children }: {
   title: string;
-  description: string;
+  destination: WorkspaceSection;
+  preview: ReturnType<typeof usePreview>;
+  follow: (event: MouseEvent<HTMLAnchorElement>, section: WorkspaceSection) => void;
+  emptyTitle: string;
+  emptyDescription: string;
+  emptyAction: () => void;
+  emptyActionLabel: string;
+  children: (record: RecordData) => ReactNode;
+}) {
+  const headingId = useId();
+  const state = preview.state;
+  return (
+    <section className="panel preview-panel" aria-labelledby={headingId}>
+      <div className="panel-title">
+        <h2 id={headingId}>{title}</h2>
+        <a className="text-link" href={sectionHref(destination)} onClick={(event) => follow(event, destination)}>
+          View {destination.toLowerCase()} <ArrowUpRight size={15} aria-hidden="true" />
+        </a>
+      </div>
+      {!state ? (
+        <p className="panel-state" role="status">Loading {title.toLowerCase()}…</p>
+      ) : "error" in state ? (
+        <div className="panel-state">
+          <p role="alert">Couldn’t load {title.toLowerCase()}. {state.error}</p>
+          <button className="secondary" onClick={preview.retry}>Retry</button>
+        </div>
+      ) : state.page.items.length ? (
+        <>
+          {(state.page.next_cursor || state.page.items.length > 5) && (
+            <p className="preview-note">Preview · showing {Math.min(5, state.page.items.length)} records</p>
+          )}
+          <ul className="preview-list">
+            {state.page.items.slice(0, 5).map((record) => <li key={record.id}>{children(record)}</li>)}
+          </ul>
+        </>
+      ) : (
+        <Empty title={emptyTitle} description={emptyDescription} action={emptyAction} actionLabel={emptyActionLabel} />
+      )}
+    </section>
+  );
+}
+
+function Empty({ title, description, action, actionLabel }: {
+  title: string;
+  description?: string;
   action?: () => void;
   actionLabel?: string;
 }) {
   return (
     <div className="empty">
-      <span>{icon}</span>
       <h3>{title}</h3>
-      <p>{description}</p>
-      {action && (
-        <button className="secondary" onClick={action}>
-          {actionLabel}
-        </button>
-      )}
+      {description && <p>{description}</p>}
+      {action && <button className="secondary" onClick={action}>{actionLabel}</button>}
     </div>
   );
 }
-function Resource({ section }: { section: string }) {
-  const [rows, setRows] = useState<RecordData[]>([]),
-    [cursor, setCursor] = useState<string | null>(null),
-    [loading, setLoading] = useState(true),
-    [error, setError] = useState(""),
-    [query, setQuery] = useState(""),
-    [filter, setFilter] = useState(""),
-    [archived,setArchived]=useState(false),
-    [editor, setEditor] = useState<RecordData | {} | null>(null),
-    [selected, setSelected] = useState<RecordData | null>(null),
-    [result, setResult] = useState("");
+
+function Dialog({ title, close, children }: {
+  title: string;
+  close: () => void;
+  children: ReactNode;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const headingId = useId();
+  useLayoutEffect(() => {
+    const element = dialog.current!;
+    const opener = document.activeElement;
+    element.showModal();
+    closeButton.current?.focus();
+    return () => {
+      element.close();
+      const target = opener instanceof HTMLElement && opener.isConnected && opener !== document.body
+        ? opener
+        : (document.querySelector<HTMLElement>("[data-dialog-focus]") ?? document.getElementById("workspace-main"));
+      target?.focus();
+    };
+  }, []);
+  useLayoutEffect(() => {
+    closeButton.current?.focus();
+  }, [title]);
+  return (
+    <dialog className="modal" ref={dialog} aria-labelledby={headingId} onCancel={(event) => {
+      event.preventDefault();
+      close();
+    }}>
+      <div className="modal-heading">
+        <h2 id={headingId}>{title}</h2>
+        <button type="button" className="text-button close" ref={closeButton} onClick={close} aria-label="Close dialog">
+          <X size={22} aria-hidden="true" />
+        </button>
+      </div>
+      {children}
+    </dialog>
+  );
+}
+
+const recordNames: Partial<Record<WorkspaceSection, string>> = {
+  Students: "student",
+  Lessons: "lesson",
+  Materials: "material",
+  Tasks: "task",
+  Homework: "homework template",
+  Flashcards: "flashcard set",
+};
+
+function recordTitle(record: Record<string, unknown>, fallback = "Record details") {
+  return text(record.display_name ?? record.title) || fallback;
+}
+
+function Resource({ section, intent }: { section: WorkspaceSection; intent?: ResourceIntent }) {
+  const [rows, setRows] = useState<RecordData[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<{ message: string; cursor?: string }>();
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState("");
+  const [archived, setArchived] = useState(false);
+  const [materialSearch, setMaterialSearch] = useState("");
+  const [editor, setEditor] = useState<Record<string, unknown> | null>(
+    () => intent?.type === "create" ? initial(section) : null,
+  );
+  const [detail, setDetail] = useState<RecordData | null>(intent?.type === "detail" ? intent.record : null);
+  const [selected, setSelected] = useState<RecordData | null>(null);
+  const [detailError, setDetailError] = useState("");
+  const [detailAttempt, setDetailAttempt] = useState(0);
+  const [actionError, setActionError] = useState("");
+  const [mutating, setMutating] = useState(false);
+  const [result, setResult] = useState("");
+  const loadSequence = useRef(0);
   const route = routes[section];
+  const recordName = recordNames[section];
+  const addLabel = section === "Lessons" ? "Plan a lesson" : recordName ? `Add a ${recordName}` : "";
+  const calendarRange = useRef({
+    start: new Date().toISOString(),
+    end: new Date(Date.now() + 30 * 86400000).toISOString(),
+  });
+
   async function load(next?: string) {
+    const sequence = ++loadSequence.current;
     setLoading(true);
-    setError("");
+    setLoadError(undefined);
+    if (!next) {
+      setRows([]);
+      setCursor(null);
+    }
     try {
+      const params = new URLSearchParams();
       let path = "/" + route;
-      if(fields[section])path+="?archived="+archived;
-      if (section === "Calendar") {
-        const start = new Date(),
-          end = new Date(Date.now() + 30 * 86400000);
-        path += `?start=${start.toISOString()}&end=${end.toISOString()}`;
+      if (materialSearch) {
+        path = "/search";
+        params.set("types", "materials");
+        params.set("q", materialSearch);
+      } else if (fields[section]) {
+        params.set("archived", String(archived));
       }
-      if (next)
-        path +=
-          (path.includes("?") ? "&" : "?") +
-          "cursor=" +
-          encodeURIComponent(next);
-      const page = await request<Page>(path);
-      setRows((old) => (next ? [...old, ...page.items] : page.items));
-      setCursor(page.next_cursor);
+      if (section === "Calendar") {
+        params.set("start", calendarRange.current.start);
+        params.set("end", calendarRange.current.end);
+      }
+      if (next) params.set("cursor", next);
+      const page = await request<Page>(path + (params.size ? "?" + params : ""));
+      if (sequence === loadSequence.current) {
+        setRows((old) => (next ? [...old, ...page.items] : page.items));
+        setCursor(page.next_cursor);
+      }
     } catch (e) {
-      setError((e as Error).message);
+      if (sequence === loadSequence.current)
+        setLoadError({ message: (e as Error).message, cursor: next });
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }
   useEffect(() => {
-    load();
-  }, [archived]);
+    void load();
+    return () => { loadSequence.current += 1; };
+  }, [archived, materialSearch]);
+  useEffect(() => {
+    if (!detail) return;
+    if (!fields[section] && section !== "Assignments") {
+      setSelected(detail);
+      return;
+    }
+    let active = true;
+    request<{ data: RecordData }>("/" + route + "/" + detail.id)
+      .then((response) => { if (active) setSelected(response.data); })
+      .catch((error: Error) => { if (active) setDetailError(error.message); });
+    return () => { active = false; };
+  }, [detail, detailAttempt, route, section]);
+
+  function closeDialog() {
+    setEditor(null);
+    setDetail(null);
+    setSelected(null);
+    setDetailError("");
+    setActionError("");
+  }
+  function addRecord() {
+    setEditor(initial(section));
+  }
+  function openDetail(record: RecordData) {
+    setDetail(record);
+    setSelected(null);
+    setDetailError("");
+    setActionError("");
+  }
+  function clearFilters() {
+    setQuery("");
+    setFilter("");
+    setMaterialSearch("");
+  }
   async function mutate(path: string, body: unknown = {}, revision?: number) {
+    setActionError("");
+    setMutating(true);
     try {
       const response = await request<{
         data?: RecordData;
@@ -401,230 +576,143 @@ function Resource({ section }: { section: string }) {
             ? "Operation queued; awaiting confirmation."
             : "Change saved."),
       );
+      closeDialog();
       await load();
-      setSelected(null);
     } catch (e) {
-      setError((e as Error).message);
+      setActionError((e as Error).message);
+    } finally {
+      setMutating(false);
     }
   }
+
+  const localQuery = materialSearch ? "" : query.trim().toLowerCase();
   const visible = rows.filter(
-    (r) =>
-      JSON.stringify(r).toLowerCase().includes(query.toLowerCase()) &&
-      (!filter || r.status === filter),
+    (record) =>
+      (!localQuery || JSON.stringify(record).toLowerCase().includes(localQuery)) &&
+      (!filter || record.status === filter),
   );
+  const filtered = Boolean(localQuery || filter || materialSearch);
+  const selectedName = editor
+    ? `${editor.id ? "Edit" : "New"} ${recordName}`
+    : recordTitle(selected ?? detail ?? {}, section === "Activity" ? "Revision detail" : "Record details");
+
   return (
     <>
       <div className="page-heading">
-        <div>
-          <span className="eyebrow">YOUR TEACHING TOOLKIT</span>
-          <h1>
-            {section === "Activity" ? "A record of the work." : section + "."}
-          </h1>
-          <p>
-            {
-              (
-                {
-                  Students: "People at the heart of every lesson.",
-                  Lessons: "Thoughtful plans for meaningful progress.",
-                  Materials: "A library of ideas, ready when you are.",
-                  Tasks: "A little structure for everything ahead.",
-                  Homework: "Practice that carries the lesson forward.",
-                  Flashcards: "Make the important ideas stick.",
-                  Calendar: "Your teaching week, together.",
-                  Activity: "Changes, provenance, and a way back.",
-                } as Record<string, string>
-              )[section]
-            }
-          </p>
-        </div>
-        {fields[section] && (
-          <button onClick={() => setEditor(initial(section))}>
-            <Plus size={17} /> Add{" "}
-            {section === "Homework"
-              ? "template"
-              : section === "Flashcards"
-                ? "set"
-                : section.slice(0, -1).toLowerCase()}
+        <h1>{section === "Homework" ? "Homework templates" : section}</h1>
+        {recordName && (
+          <button data-dialog-focus onClick={addRecord}>
+            <Plus size={17} aria-hidden="true" />{addLabel}
           </button>
         )}
       </div>
-      {error && (
-        <div role="alert" className="error">
-          {error}{" "}
-          <button className="text-button" onClick={() => load()}>
-            Retry
-          </button>
-        </div>
-      )}
       {result && (
-        <div role="status" className="notice">
-          {result.startsWith("http") ? (
-            <>
-              <input aria-label="Assignment link" readOnly value={result} />
-              <button onClick={() => navigator.clipboard.writeText(result)}>
-                Copy link
-              </button>
-              <p>Copy this link now. It cannot be shown again.</p>
-            </>
-          ) : (
-            result
-          )}
-          <button className="text-button" onClick={() => setResult("")}>
-            Dismiss
-          </button>
+        <div className="notice">
+          {result.startsWith("http") ? <CopyLink url={result} /> : <p role="status">{result}</p>}
+          <button className="text-button" onClick={() => setResult("")}>Dismiss</button>
         </div>
       )}
       {section === "Calendar" && <CalendarEditor refresh={() => load()} />}
-      <section className="panel">
+      <section className="panel" aria-label={`${section} records`}>
         <div className="toolbar">
           <label className="search">
-            <Search size={17} />
-            <input
-              aria-label="Filter records"
+            <Search size={17} aria-hidden="true" />
+            <input type="search" name="search-records" autoComplete="off"
+              aria-label={`Search ${section.toLowerCase()}`}
               placeholder={`Search ${section.toLowerCase()}…`}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+              maxLength={500} value={query} onChange={(event) => {
+                setQuery(event.target.value);
+                if (materialSearch && !event.target.value.trim()) setMaterialSearch("");
+              }} />
           </label>
           {["Tasks", "Lessons"].includes(section) && (
-            <select
-              aria-label="Status"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            >
+            <select name="status" aria-label="Status" value={filter} onChange={(event) => setFilter(event.target.value)}>
               <option value="">All statuses</option>
-              {(section === "Tasks"
-                ? ["todo", "in_progress", "done"]
-                : ["planned", "completed", "cancelled"]
-              ).map((s) => (
-                <option key={s}>{s}</option>
+              {(section === "Tasks" ? ["todo", "in_progress", "done"] : ["planned", "completed", "cancelled"]).map((status) => (
+                <option key={status} value={status}>{formatStatus(status)}</option>
               ))}
             </select>
           )}
           {section === "Materials" && (
-            <button
-              className="secondary"
-              disabled={!query}
-              onClick={async () => {
-                try {
-                  const page = await request<Page>(
-                    "/search?types=materials&q=" + encodeURIComponent(query),
-                  );
-                  setRows(page.items);
-                  setQuery("");
-                  setCursor(page.next_cursor);
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
-            >
+            <button className="secondary" disabled={!query.trim() || archived}
+              onClick={() => {
+                const term = query.trim();
+                if (materialSearch === term) void load();
+                else setMaterialSearch(term);
+              }}>
               Search text
             </button>
           )}
-          {fields[section]&&<label className="option" style={{padding:6,margin:0,fontSize:11}}><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>Archived</label>}
-          <span className="count">{visible.length} records</span>
+          {recordName && (
+            <label className="archive-filter">
+              <input type="checkbox" name="archived" checked={archived} onChange={(event) => {
+                setArchived(event.target.checked);
+                setMaterialSearch("");
+              }} />
+              Archived
+            </label>
+          )}
         </div>
-        {loading && !rows.length ? (
-          <div className="empty" role="status">
-            Loading your workspace…
+        {materialSearch && <p className="preview-note">Text search results for “{materialSearch}” <button className="text-button" onClick={clearFilters}>Clear search</button></p>}
+        {loadError && (
+          <div className="panel-state">
+            <p className="error" role="alert">Couldn’t load {section.toLowerCase()}. {loadError.message}</p>
+            <button className="secondary" onClick={() => load(loadError.cursor)}>Retry</button>
           </div>
-        ) : visible.length ? (
-          <div className="records">
-            {visible.map((r) => (
-              <button
-                className="list-row record-button"
-                key={r.id}
-                onClick={async()=>{if(fields[section]||section==='Assignments'){try{const response=await request<{data:RecordData}>('/'+route+'/'+r.id);setSelected(response.data)}catch(e){setError((e as Error).message)}}else setSelected(r)}}
-              >
-                <span className="record-icon">
-                  {section === "Students" ? (
-                    text(r.display_name).slice(0, 1)
-                  ) : (
-                    <BookOpen size={19} />
-                  )}
-                </span>
-                <div>
-                  <strong>
-                    {text(r.display_name ?? r.title ?? r.entity_type ?? r.id)}
-                  </strong>
-                  <small>
-                    {text(
-                      r.subject ??
-                        r.description ??
-                        r.actor_category ??
-                        r.status ??
-                        "Revision " + r.revision,
-                    ).slice(0, 120)}
-                  </small>
-                </div>
-                {r.status != null && (
-                  <span className="badge">{text(r.status)}</span>
-                )}
-                <ChevronRight size={17} />
-              </button>
-            ))}
-          </div>
-        ) : (
-          <Empty
-            icon="✧"
-            title={`Your ${section.toLowerCase()} start here`}
-            description="Everything you add will appear here, ready for your next step."
-            action={
-              fields[section] ? () => setEditor(initial(section)) : undefined
-            }
-            actionLabel="Add your first record"
-          />
         )}
-        {cursor && (
-          <button className="secondary load-more" onClick={() => load(cursor)}>
-            Load more
+        {loading && <p className="panel-state" role="status">Loading {section.toLowerCase()}…</p>}
+        {visible.length > 0 && (
+          <div className="records">
+            {visible.map((record) => {
+              const due = section === "Tasks" ? describeDue(record.due_at) : null;
+              const summary = text(record.subject ?? record.description ?? record.actor_category);
+              return (
+                <button className="list-row record-button" key={record.id} onClick={() => openDetail(record)}>
+                  <span className="record-icon" aria-hidden="true">
+                    {section === "Students" ? text(record.display_name).slice(0, 1) : <BookOpen size={19} />}
+                  </span>
+                  <span className="row-copy">
+                    <strong>{recordTitle(record, text(record.entity_type ?? record.id))}</strong>
+                    {due ? (
+                      <small className={due.overdue && record.status !== "done" ? "overdue" : undefined}>
+                        {record.status === "done" && record.due_at ? formatDateTime(record.due_at) : due.text}
+                      </small>
+                    ) : summary && <small>{summary}</small>}
+                  </span>
+                  {record.status != null && <span className="badge">{formatStatus(record.status)}</span>}
+                  <ChevronRight size={17} aria-hidden="true" />
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {!loading && !loadError && !visible.length && (
+          filtered ? (
+            <Empty title={cursor ? "No matches in the loaded records" : "No matching records"}
+              description={cursor ? "Clear the filters or load more records." : undefined}
+              action={clearFilters} actionLabel="Clear filters" />
+          ) : (
+            <Empty title={`No ${archived ? "archived " : ""}${section.toLowerCase()}${section === "Homework" ? " templates" : ""} yet`}
+              action={recordName && !archived ? addRecord : undefined} actionLabel={addLabel} />
+          )
+        )}
+        {cursor && !loadError && (
+          <button className="secondary load-more" disabled={loading} onClick={() => load(cursor)}>
+            {loading ? "Loading…" : "Load more"}
           </button>
         )}
       </section>
-      {editor && (
-        <Editor
-          section={section}
-          record={editor}
-          close={() => setEditor(null)}
-          saved={() => {
-            setEditor(null);
-            load();
-          }}
-        />
-      )}
-      {selected && (
-        <div className="modal-backdrop">
-          <section className="modal detail">
-            <button
-              className="close"
-              aria-label="Close details"
-              onClick={() => setSelected(null)}
-            >
-              ×
-            </button>
-            <span className="eyebrow">
-              {section} · REVISION {selected.revision}
-            </span>
-            <h2>
-              {text(
-                selected.display_name ?? selected.title ?? "Revision detail",
-              )}
-            </h2>
-            <dl>
-              {Object.entries(selected).map(([key, value]) => (
-                <div key={key}>
-                  <dt>{label(key)}</dt>
-                  <dd>
-                    <pre>
-                      {typeof value === "object"
-                        ? JSON.stringify(value, null, 2)
-                        : text(value)}
-                    </pre>
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <div className="actions">
+      {(editor || detail) && (
+        <Dialog title={selectedName} close={closeDialog}>
+          {editor ? (
+            <Editor section={section} record={editor} close={closeDialog}
+              saved={() => { closeDialog(); void load(); }} />
+          ) : selected ? (
+            <div className="detail">
+              <RecordSummary record={selected} />
+              {actionError && <p role="alert" className="error">{actionError}</p>}
+              {mutating && <p role="status">Saving changes…</p>}
+              <fieldset className="detail-actions" disabled={mutating}>
               {fields[section] && (
                 <>
                   <button
@@ -637,13 +725,16 @@ function Resource({ section }: { section: string }) {
                   </button>
                   <button
                     className="secondary"
-                    onClick={() =>
-                      mutate(
+                    onClick={() => {
+                      if (!selected.archived_at && !confirm(section === "Students"
+                        ? "Archive this student? Existing assignments and access links stay active until you revoke them."
+                        : `Archive this ${recordName}?`)) return;
+                      void mutate(
                         `/${route}/${selected.id}/${selected.archived_at ? "restore" : "archive"}`,
                         {},
                         selected.revision,
-                      )
-                    }
+                      );
+                    }}
                   >
                     {selected.archived_at ? "Restore" : "Archive"}
                   </button>
@@ -655,8 +746,8 @@ function Resource({ section }: { section: string }) {
                 <CalendarTools
                   event={selected}
                   refresh={() => {
-                    setSelected(null);
-                    load();
+                    closeDialog();
+                    void load();
                   }}
                 />
               )}
@@ -664,21 +755,22 @@ function Resource({ section }: { section: string }) {
                 <AssignmentReview
                   assignment={selected}
                   refresh={() => {
-                    setSelected(null);
-                    load();
+                    closeDialog();
+                    void load();
                   }}
                 />
               )}
               {section === "Materials" && (
-                <label className="button secondary">
-                  Upload version
+                <label className="file-control">
+                  Upload a material version
                   <input
                     type="file"
                     accept=".pdf,.pptx,.docx,.md,.txt"
-                    hidden
                     onChange={async (e) => {
-                      const file = e.target.files?.[0];
+                      const input = e.currentTarget;
+                      const file = input.files?.[0];
                       if (!file) return;
+                      input.value = "";
                       const body = new FormData();
                       body.append("file", file);
                       await mutate(
@@ -712,7 +804,7 @@ function Resource({ section }: { section: string }) {
                         "flashcards.tsv",
                       );
                     } catch (e) {
-                      setError((e as Error).message);
+                      setActionError((e as Error).message);
                     }
                   }}
                 >
@@ -737,10 +829,68 @@ function Resource({ section }: { section: string }) {
                   Restore previous state
                 </button>
               )}
+              </fieldset>
+              <details className="technical-details">
+                <summary>Technical details</summary>
+                <pre>{JSON.stringify(selected, null, 2)}</pre>
+              </details>
             </div>
-          </section>
-        </div>
+          ) : detailError ? (
+            <>
+              <p role="alert" className="error">Couldn’t load record details. {detailError}</p>
+              <button className="secondary" onClick={() => {
+                setDetailError("");
+                setDetailAttempt((attempt) => attempt + 1);
+              }}>Retry</button>
+            </>
+          ) : <p role="status">Loading record details…</p>}
+        </Dialog>
       )}
+    </>
+  );
+}
+
+function RecordSummary({ record }: { record: RecordData }) {
+  const keys = [
+    "status", "due_at", "subject", "level", "description", "plan", "goals", "notes", "instructions",
+    "start", "end", "expires_at", "created_at",
+  ];
+  return (
+    <dl className="record-summary">
+      {keys.filter((key) => record[key]).map((key) => {
+        const formatted = key === "status" ? formatStatus(record[key])
+          : ["due_at", "start", "end", "expires_at", "created_at"].includes(key)
+            ? formatDateTime(record[key]) || text(record[key])
+            : text(record[key]);
+        return (
+          <div key={key}>
+            <dt>{key === "due_at" ? "Due" : label(key)}</dt>
+            <dd className="preserve">{formatted}</dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
+function CopyLink({ url }: { url: string }) {
+  const [feedback, setFeedback] = useState("");
+  return (
+    <>
+      <label>
+        Assignment link
+        <input readOnly value={url} />
+      </label>
+      <button type="button" onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(url);
+          setFeedback("Link copied.");
+        } catch {
+          setFeedback("Couldn’t copy automatically. Select the assignment link and copy it.");
+        }
+      }}>Copy link</button>
+      <p>Copy this link now. It cannot be shown again.</p>
+      <p role="status" className="copy-feedback">{feedback}</p>
     </>
   );
 }
@@ -790,6 +940,13 @@ function Publish({
     </form>
   );
 }
+function localDateTime(value: unknown) {
+  const date = dateValue(value);
+  if (!date) return "";
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
 function Editor({
   section,
   record,
@@ -797,14 +954,13 @@ function Editor({
   saved,
 }: {
   section: string;
-  record: RecordData | {};
+  record: Record<string, unknown>;
   close: () => void;
   saved: () => void;
 }) {
   const [draft, setDraft] = useState<Record<string, unknown>>(record),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false),
-    [key] = useState(crypto.randomUUID());
+    [busy, setBusy] = useState(false);
   const existing = record as RecordData;
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -837,7 +993,6 @@ function Editor({
           method: existing.id ? "PATCH" : "POST",
           body: payload,
           revision: existing.id ? existing.revision : undefined,
-          key,
         },
       );
       saved();
@@ -848,20 +1003,7 @@ function Editor({
     }
   }
   return (
-    <div className="modal-backdrop">
-      <form className="modal" onSubmit={save}>
-        <button
-          type="button"
-          className="close"
-          aria-label="Close editor"
-          onClick={close}
-        >
-          ×
-        </button>
-        <span className="eyebrow">MAKE IT YOUR OWN</span>
-        <h2>
-          {existing.id ? "Edit" : "New"} {section.toLowerCase()}
-        </h2>
+    <form onSubmit={save} autoComplete="off">
         {error && (
           <p className="error" role="alert">
             {error}
@@ -882,7 +1024,7 @@ function Editor({
           if (["student_id", "lesson_id"].includes(field))
             return (
               <label key={field}>
-                {label(field)}
+                {field === "student_id" ? "Student" : "Lesson"}
                 <ReferenceInput
                   route={field === "student_id" ? "students" : "lessons"}
                   value={text(val)}
@@ -894,7 +1036,7 @@ function Editor({
           if (["student_ids", "lesson_ids", "material_ids"].includes(field))
             return (
               <label key={field}>
-                {label(field)}
+                {field === "student_ids" ? "Students" : field === "lesson_ids" ? "Lessons" : "Materials"}
                 <ReferenceMultiple
                   route={
                     field === "student_ids"
@@ -926,7 +1068,7 @@ function Editor({
             );
           return (
             <label key={field}>
-              {label(field)}
+              {field === "due_at" ? "Due date" : label(field)}
               {field === "status" ? (
                 <select
                   value={text(
@@ -940,7 +1082,7 @@ function Editor({
                     ? ["todo", "in_progress", "done"]
                     : ["planned", "completed", "cancelled"]
                   ).map((v) => (
-                    <option key={v}>{v}</option>
+                    <option key={v} value={v}>{formatStatus(v)}</option>
                   ))}
                 </select>
               ) : json ||
@@ -971,7 +1113,8 @@ function Editor({
                     (section === "Lessons" && field === "student_id")
                   }
                   type={field === "due_at" ? "datetime-local" : "text"}
-                  value={text(val)}
+                  name={field}
+                  value={field === "due_at" ? localDateTime(val) : text(val)}
                   onChange={(e) =>
                     setDraft({ ...draft, [field]: e.target.value })
                   }
@@ -987,8 +1130,7 @@ function Editor({
             Cancel
           </button>
         </div>
-      </form>
-    </div>
+    </form>
   );
 }
 async function download(path: string, name: string) {
@@ -1015,16 +1157,9 @@ function Connections() {
   return (
     <>
       <div className="page-heading">
-        <div>
-          <span className="eyebrow">CONNECTED, ON YOUR TERMS</span>
-          <h1>A little extra support.</h1>
-          <p>
-            Bring your calendar and your preferred assistant into your workflow.
-          </p>
-        </div>
+        <h1>Connections</h1>
       </div>
       <section className="panel connection">
-        <CalendarDays />
         <h2>Google Calendar</h2>
         <p>
           Connect one writable calendar to schedule lessons. Google remains the
@@ -1032,7 +1167,11 @@ function Connections() {
         </p>
         {connection && (
           <>
-            <pre>{JSON.stringify(connection, null, 2)}</pre>
+            <p>Status: {formatStatus(connection.status)}</p>
+            <details className="technical-details">
+              <summary>Technical details</summary>
+              <pre>{JSON.stringify(connection, null, 2)}</pre>
+            </details>
             {connection.status === "select_calendar" && (
               <CalendarSelection
                 connection={connection}
@@ -1092,8 +1231,7 @@ function Connections() {
         )}
       </section>
       <section className="panel connection">
-        <Sparkles />
-        <h2>Your external AI assistant</h2>
+        <h2>External AI assistant</h2>
         <p>
           Connect an approved remote Streamable HTTP MCP client using OAuth with
           PKCE. Your assistant can access student data and materials when

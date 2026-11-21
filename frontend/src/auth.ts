@@ -9,11 +9,12 @@ export const authConfig = {
 export const keycloak = new Keycloak(authConfig);
 export const authRedirectUri = new URL("/", location.origin).href;
 let initialization: Promise<boolean> | undefined;
-async function initialize() {
+async function initialize(resumeSession: boolean) {
   const authenticated = await keycloak.init({
     redirectUri: authRedirectUri,
     pkceMethod: "S256",
     checkLoginIframe: false,
+    ...(resumeSession ? { onLoad: "check-sso" as const } : {}),
   });
   setTokenProvider(async () => {
     await keycloak.updateToken(30);
@@ -22,6 +23,6 @@ async function initialize() {
   return authenticated;
 }
 
-export function initializeAuth() {
-  return (initialization ??= initialize());
+export function initializeAuth(resumeSession = false) {
+  return (initialization ??= initialize(resumeSession));
 }

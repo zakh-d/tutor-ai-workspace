@@ -6,4 +6,4 @@ Build-time variables: `VITE_KEYCLOAK_URL`, `VITE_KEYCLOAK_REALM` (default `tutor
 
 The interface includes authenticated record management, structured homework/card editors, assignment publication/access/review, public questions/files/draft/submit/feedback, material versions/corrections, calendar connection/selection/queued operations, and activity recovery. Backend validation and optimistic concurrency remain authoritative. Pending provider jobs are shown as pending and polled for completion.
 
-Advanced source citations and tags use JSON fields. Reference selectors currently load up to 100 records. The dashboard totals reflect the fetched first page rather than claiming whole-workspace counts. External Google OAuth requires operator credentials; the UI reports unavailable configuration instead of simulating a connection.
+Advanced source citations and tags use JSON fields. Reference selectors currently load up to 100 records. The Overview shows a preview of planned lessons and open tasks, and labels truncated results. External Google OAuth requires operator credentials; the UI reports unavailable configuration instead of simulating a connection.
