@@ -1,6 +1,6 @@
 # ADR-011 — Checked main-branch container releases
 
-Status: Accepted. Extends ADR-001 packaging; Kubernetes runtime and separate database topology remain proposed.
+Status: Accepted; version allocation and Git release tags superseded by [ADR-012](012-semantic-release-tags.md). Extends ADR-001 packaging; Kubernetes runtime and separate database topology remain proposed.
 
 Date: 2026-11-21
 

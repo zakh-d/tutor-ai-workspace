@@ -28,3 +28,5 @@ No exact throughput target is promised before measurement; test the pilot baseli
 The [deployment assessment](kubernetes-deployment-plan.md) scopes GHCR publishing and automatic build tags, shared MinIO/Keycloak integration, Flux migration ordering, persistent storage and restore gates. Implementation is pending; first record the superseding deployment/storage ADR, then update T14 for the accepted topology.
 
 Container release implementation: [ADR-011](adr/011-container-release-pipeline.md) adds checked main-branch GHCR publication, immutable image/build tags and production frontend identity defaults. First GitHub/GHCR execution and homelab runtime changes remain pending; see the [release runbook](../infra/release/README.md).
+
+[ADR-012](adr/012-semantic-release-tags.md) replaces commit-based primary release tags with automatic semantic versions. CI release checks include version bump policy, semantic image conflicts and out-of-order publication.

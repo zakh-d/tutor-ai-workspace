@@ -27,6 +27,35 @@ def image_digest(reference):
     return digest
 
 
+VERSION = re.compile(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+
+
+def next_version(previous, messages):
+    if previous is None:
+        return 'v0.1.0'
+    major, minor, patch = map(int, VERSION.fullmatch(previous).groups())
+    if re.search(r'(?m)^[a-zA-Z][\w-]*(?:\([^\r\n]*\))?!:', messages) or re.search(r'(?m)^BREAKING[ -]CHANGE:', messages):
+        return f'v{major + 1}.0.0'
+    if re.search(r'(?m)^feat(?:\([^\r\n]*\))?:', messages):
+        return f'v{major}.{minor + 1}.0'
+    return f'v{major}.{minor}.{patch + 1}'
+
+
+def release_version(sha):
+    tags = [tag for tag in run('git', 'tag', '--list', 'v*').stdout.splitlines() if VERSION.fullmatch(tag)]
+    same_commit = [tag for tag in tags if run('git', 'rev-parse', f'{tag}^{{commit}}').stdout.strip() == sha]
+    if len(same_commit) > 1:
+        raise RuntimeError('Multiple semantic release tags point to this commit')
+    if same_commit:
+        return same_commit[0], True
+    previous = max(tags, key=lambda tag: tuple(map(int, VERSION.fullmatch(tag).groups())), default=None)
+    if previous and run('git', 'merge-base', '--is-ancestor', previous, sha, check=False).returncode:
+        raise RuntimeError('Latest semantic release is not an ancestor; refusing an out-of-order release')
+    revision = f'{previous}..{sha}' if previous else sha
+    messages = run('git', 'log', '--format=%B', revision).stdout
+    return next_version(previous, messages), False
+
+
 def publish(env=os.environ):
     sha = env['GITHUB_SHA']
     repository = env['GITHUB_REPOSITORY'].lower()
@@ -38,15 +67,11 @@ def publish(env=os.environ):
         raise RuntimeError('Checkout does not match the tested commit')
     image = f'ghcr.io/{repository}'
     reference = f'{image}:sha-{sha}'
-    tag = f'build-{sha}'
     run('git', 'fetch', 'origin', '--tags')
-    existing = run('git', 'rev-parse', '--verify', f'refs/tags/{tag}', check=False)
-    if existing.returncode == 0:
-        target = run('git', 'rev-parse', f'{tag}^{{commit}}').stdout.strip()
-        if target != sha:
-            raise RuntimeError('Existing release tag points to another commit')
+    tag, existing = release_version(sha)
+    version_reference = f'{image}:{tag}'
     digest = image_digest(reference)
-    if existing.returncode == 0:
+    if existing:
         annotation = run('git', 'for-each-ref', '--format=%(contents)', f'refs/tags/{tag}').stdout
         if not digest or f'Image: {image}@{digest}\n' not in annotation:
             raise RuntimeError('Existing release tag and registry digest disagree')
@@ -63,12 +88,22 @@ def publish(env=os.environ):
             digest = json.loads(metadata.read_text())['containerimage.digest']
         if image_digest(reference) != digest:
             raise RuntimeError('Published image digest verification failed')
-    if existing.returncode != 0:
+    version_digest = image_digest(version_reference)
+    if version_digest is not None and version_digest != digest:
+        raise RuntimeError('Semantic image tag already has a different digest')
+    if existing and version_digest is None:
+        raise RuntimeError('Existing semantic release image is missing')
+    if version_digest is None:
+        run('docker', 'buildx', 'imagetools', 'create', '--prefer-index=false',
+            '--tag', version_reference, f'{image}@{digest}')
+        if image_digest(version_reference) != digest:
+            raise RuntimeError('Semantic image digest verification failed')
+    if not existing:
         run('git', 'config', 'user.name', 'github-actions[bot]')
         run('git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com')
         run('git', 'tag', '-a', tag, sha, '-m', f'Image: {image}@{digest}\nSource: {sha}')
         run('git', 'push', 'origin', f'refs/tags/{tag}')
-    summary = f'Image: `{image}@{digest}`\n\nImage tag: `{reference}`\n\nGit tag: `{tag}`\n'
+    summary = f'Image: `{image}@{digest}`\n\nImage tag: `{version_reference}`\n\nSource image tag: `{reference}`\n\nGit tag: `{tag}`\n'
     print(summary)
     if env.get('GITHUB_STEP_SUMMARY'):
         with open(env['GITHUB_STEP_SUMMARY'], 'a') as output:

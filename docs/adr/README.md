@@ -14,3 +14,4 @@ All records below are accepted for the documentation baseline dated 2026-11-14. 
 - [ADR-010 — Student timezones and local recurring lesson schedules](010-student-timezones-and-schedules.md)
 
 - [ADR-011 — Checked main-branch container releases](011-container-release-pipeline.md)
+- [ADR-012 — Automatic semantic release tags](012-semantic-release-tags.md)

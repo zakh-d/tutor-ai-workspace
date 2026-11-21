@@ -33,4 +33,4 @@ Changes to scope must update the relevant specification, ADR if architectural, b
 
 ## Container releases
 
-Push to `main` to run checks and publish the combined application image to `ghcr.io/<owner>/<repository>` with automatic commit-based image and Git tags. Production frontend builds default to shared homelab Keycloak. See the [release setup and variables](infra/release/README.md); Kubernetes runtime deployment remains in the homelab repository.
+Push to `main` to run checks and publish the combined application image to `ghcr.io/<owner>/<repository>` with automatic semantic image and Git tags (`v0.1.0`, then patch/minor/major bumps from commit messages). Production frontend builds default to shared homelab Keycloak. See the [release setup and variables](infra/release/README.md); Kubernetes runtime deployment remains in the homelab repository.

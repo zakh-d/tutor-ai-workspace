@@ -79,3 +79,17 @@ Executed validation:
 Actual GitHub Actions execution, authenticated GHCR publishing and GitHub bot tag permissions require the repository the user will create. ARM64 image builds, live shared-Keycloak login, k3s deployment, worker/database/S3 integration and `sh infra/smoke.sh` were not run for this packaging change. Backend runtime code was unchanged, so backend pytest/PostgreSQL gates were not rerun locally; CI retains both existing gates. Do not treat these local packaging checks as deployment readiness.
 
 Final documentation gates: `git diff --check` exited 0; all 112 relative links across ten changed Markdown files resolved. Reviewed the tracked diff and all added release/configuration/ADR files.
+
+## Semantic release tags — 2026-11-21
+
+Implemented [ADR-012](adr/012-semantic-release-tags.md), superseding ADR-011's version policy. Image/Git releases now use matching `vMAJOR.MINOR.PATCH`, starting at v0.1.0. Subsequent commit messages select major for breaking markers, minor for feat, patch otherwise. SHA image tags remain for traceability/retry. Semantic image digest is verified before Git publication; conflicting tags and out-of-order new releases fail. Existing CI unittest gate covers the new behavior. No backend/frontend runtime or dependencies changed.
+
+Executed checks:
+
+- `python -m unittest discover -s infra/release -p 'test_*.py' -v`: exit 0, 20 tests, including real temporary Git annotated-tag publication/retry and v0.1.0 → v0.2.0. An initial run failed because an old build-failure assertion counted read-only `git tag --list` as mutation; corrected it to distinguish `git tag -a` and retained failure assertions.
+- `docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color`: exit 0.
+- `docker buildx imagetools create --help`: exit 0; confirms `--prefer-index=false` support for copying the source manifest without changing its media type. Actual authenticated semantic image copy remains unexecuted until GitHub/GHCR setup exists.
+
+No application pytest, frontend tests/build, PostgreSQL, image rebuild or live integration gates were rerun for this release-helper-only change. Those existing CI gates remain unchanged. No dependency install was needed. Actual GitHub tag permissions, registry publication/copy and deployment remain separate acceptance gates.
+
+Final review: `git diff --check` exited 0 and all 117 relative Markdown links in changed documentation resolved. Complete diff and new ADR reviewed.

@@ -72,7 +72,7 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
       - name: Set up image builder
         run: docker buildx create --use --bootstrap
-      - name: Publish image and Git build tag
+      - name: Publish image and semantic Git tag
         run: python infra/release/publish.py
       - name: Log out of GHCR
         if: always()
