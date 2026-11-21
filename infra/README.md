@@ -89,3 +89,7 @@ The local `mcp-inspector` public client is configured with S256 PKCE, MCP audien
 In Inspector choose Streamable HTTP and server URL `https://app.localhost/mcp`; clear old OAuth state, then set OAuth Client ID `mcp-inspector`, leave Client Secret empty, and start with scopes `openid workspace:read`. Disable automatic offline/refresh-token requests for initial testing if the Inspector version offers that setting. The default web callback follows the Inspector address-bar origin. Login using a tutor user in realm `tutor`, not the master-realm administrator.
 
 This client was registered through the live Keycloak admin API. End-to-end connection from the user's Inspector UI still needs verification. Reference: [official Inspector OAuth configuration](https://github.com/modelcontextprotocol/inspector/blob/main/docs/mcp-server-configuration.md).
+
+## Registry builds and Kubernetes
+
+See [container releases](release/README.md) for checked main-branch GHCR images and automatic Git tags. Shared Keycloak production settings are passed explicitly during CI builds; Compose retains local defaults. Kubernetes uses the homelab Traefik ingress in place of the Compose Caddy service. Runtime provisioning remains described in the [k3s plan](../docs/kubernetes-deployment-plan.md).

@@ -22,3 +22,9 @@ Keep schema migrations incremental. The first release has no legacy application 
 Deploy to a non-production environment with synthetic students first. Verify backups/restoration, known client compatibility, Google consent configuration, revocation and tenant boundaries. Then pilot with independent tutors and monitor conversion failure rate, calendar sync age, queue age and authorization errors. Production readiness includes a documented data export/erasure procedure, validated limits and disclosure of external-agent data access. These gates require no additional infrastructure services.
 
 No exact throughput target is promised before measurement; test the pilot baseline of 10 concurrent tutor requests, 20 concurrent student saves and two conversion workers on the documented deployment hardware. Record latency/error rates and resource usage; a 2-second p95 for metadata reads/writes (excluding provider/file processing) is the initial acceptance target under that load. Record hardware and dataset size with results so the target is reproducible.
+
+## Proposed k3s deployment work
+
+The [deployment assessment](kubernetes-deployment-plan.md) scopes GHCR publishing and automatic build tags, shared MinIO/Keycloak integration, Flux migration ordering, persistent storage and restore gates. Implementation is pending; first record the superseding deployment/storage ADR, then update T14 for the accepted topology.
+
+Container release implementation: [ADR-011](adr/011-container-release-pipeline.md) adds checked main-branch GHCR publication, immutable image/build tags and production frontend identity defaults. First GitHub/GHCR execution and homelab runtime changes remain pending; see the [release runbook](../infra/release/README.md).

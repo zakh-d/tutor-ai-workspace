@@ -53,3 +53,29 @@ Executed gates for this change:
 - `git diff --check` and relative-link verification for all changed Markdown files: exit 0. No Python/frontend lint or formatter is configured, so no separate lint coverage is claimed.
 
 Remaining acceptance: no new live browser session, rebuilt deployment, `sh infra/smoke.sh`, live Google consent/provider session, or real external MCP-client acceptance was executed for this change. PostgreSQL/MinIO tests establish those service boundaries; Google fixtures and MCP schema checks do not establish live provider/client compatibility. Existing running deployment has not been replaced. No automatic invitations, notifications, infinite recurring expansion, or Google series writes were added.
+
+## k3s preparation assessment — 2026-11-21
+
+Added a [source-based deployment plan](kubernetes-deployment-plan.md) after inspecting the app and local homelab repositories. Shared Keycloak is configured; no MinIO manifests or image automation controller Deployments were found. Current kubectl context is `minikube`, so the k3s cluster was not queried. App `git remote -v` returned no remote. Publishing, automatic Git tags, Kubernetes manifests, shared realm/bucket provisioning and live acceptance are not implemented by this documentation change. Application tests/build and live integration were not run because runtime code/configuration was unchanged.
+
+Documentation gates: `git diff --check` exited 0; reviewed the complete tracked diff and new plan via `git diff --no-index -- /dev/null docs/kubernetes-deployment-plan.md` (exit 1 denotes the expected added-file diff); Python relative-link verification across the five changed Markdown files passed all 86 relative links. No application or deployment gate is claimed.
+
+## Container release pipeline — 2026-11-21
+
+Implemented [ADR-011](adr/011-container-release-pipeline.md): checks on branch pushes/PRs, GHCR publication only after successful main-push checks, lowercased repository-derived image names, immutable full-commit image tags and annotated Git tags containing the image digest. Publication uses scoped GITHUB_TOKEN permissions and serialized jobs; completed reruns verify existing source/digest, partial image-only publication can resume. Production frontend defaults target shared Keycloak; Docker Compose still supplies local auth build arguments. Local dotenv files are excluded from the build context. Homelab runtime resources are unchanged.
+
+Executed validation:
+
+- `python -m unittest discover -s infra/release -p 'test_*.py' -v`: exit 0, 13 tests. Includes a real temporary Git repository/bare remote verifying annotated tag push and safe rerun; registry/build failure ordering uses controlled command responses.
+- `npm test --prefix frontend`: exit 0, 25 tests across seven files.
+- `npm run build --prefix frontend`: exit 0, TypeScript and production Vite build; compiled assets contain `https://auth.zahk.tech`.
+- `docker compose --env-file .env.example config --quiet`: exit 0.
+- `docker build --build-arg VITE_KEYCLOAK_URL=https://auth.zahk.tech --build-arg VITE_KEYCLOAK_REALM=tutor --build-arg VITE_KEYCLOAK_CLIENT_ID=tutor-web -t tutor-workspace-app:release-check .`: exit 0 on amd64. Existing frozen dependency layers were cached; no dependency or lockfile changes. Docker requires elevated daemon access in this environment; initial unprivileged `docker info` failed with permission denied.
+- `docker run --rm --entrypoint python tutor-workspace-app:release-check -c 'from pathlib import Path; assets=list(Path("/app/frontend/dist/assets").glob("*.js")); assert assets; assert any("https://auth.zahk.tech" in p.read_text() for p in assets); import app.main; print("Production identity bundle and app import: PASS")'`: exit 0. Production identity URL and backend import passed; dependency deprecation warnings remain.
+- `docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color`: exit 0; same pinned non-mutating gate added to CI.
+- `docker buildx imagetools inspect --format '{{json .Manifest}}' docker.io/library/python:3.12.10-slim-bookworm` plus Python JSON digest assertion: exit 0. An initial direct digest template returned human-readable output on the installed buildx; changed the helper to parse the verified structured manifest format and added regression coverage.
+- Workflow YAML parsed using existing `.venv/bin/python`/PyYAML; exit 0. Initial system-Python parsing failed because PyYAML is not installed there. No dependency was added for this optional inspection.
+
+Actual GitHub Actions execution, authenticated GHCR publishing and GitHub bot tag permissions require the repository the user will create. ARM64 image builds, live shared-Keycloak login, k3s deployment, worker/database/S3 integration and `sh infra/smoke.sh` were not run for this packaging change. Backend runtime code was unchanged, so backend pytest/PostgreSQL gates were not rerun locally; CI retains both existing gates. Do not treat these local packaging checks as deployment readiness.
+
+Final documentation gates: `git diff --check` exited 0; all 112 relative links across ten changed Markdown files resolved. Reviewed the tracked diff and all added release/configuration/ADR files.

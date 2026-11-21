@@ -57,3 +57,9 @@ Verify all relative links resolve; every F01–F12 feature has a row; every ADR 
 ## Repeatable scheduling gates
 
 CI runs `SCHEDULING_INTEGRATION=1 uv run pytest -q tests/test_scheduling.py` against its migrated PostgreSQL service, in addition to the full unit suite and frontend tests/build. This gate does not require MinIO or Google. Feature-specific tests exercise recurrence, daylight saving boundaries, mutation preconditions and independent occurrence changes; frontend tests exercise conversion and labelled displays. Live provider acceptance remains T08/T09 and requires Google credentials.
+
+## Proposed Kubernetes acceptance
+
+The [k3s plan](kubernetes-deployment-plan.md) identifies additional release checks for image/tag repeatability, manifest validation, migration failure ordering, shared realm/bucket isolation, ingress/MCP transport and coordinated restore. These checks are pending and do not supersede T14 until the topology ADR is accepted. Repository inspection does not establish live cluster readiness.
+
+Container packaging/release (P0/P5, T02/T14): [ADR-011](adr/011-container-release-pipeline.md) and [release checks](../infra/release/README.md) add deterministic CI regression gates for source identity, build failure ordering, registry failures, reruns and digest/tag disagreement. Frontend tests cover deployment identity and exact same-origin callback. Actual GitHub/GHCR publication, homelab shared realm and deployed MCP remain separate acceptance gates.

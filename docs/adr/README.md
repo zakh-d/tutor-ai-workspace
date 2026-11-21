@@ -12,3 +12,5 @@ All records below are accepted for the documentation baseline dated 2026-11-14. 
 - [ADR-008 — External generation and autonomous scoped agents](008-agent-boundary.md)
 - [ADR-009 — Typed aggregates in PostgreSQL JSONB](009-aggregate-persistence.md)
 - [ADR-010 — Student timezones and local recurring lesson schedules](010-student-timezones-and-schedules.md)
+
+- [ADR-011 — Checked main-branch container releases](011-container-release-pipeline.md)

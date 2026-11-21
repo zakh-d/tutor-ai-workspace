@@ -19,6 +19,8 @@ A private workspace for independent tutors to organize students, teaching materi
 11. [Implementation backlog](docs/backlog.md)
 12. [Acceptance tests and requirement traceability](docs/validation.md)
 
+See the [k3s deployment preparation assessment](docs/kubernetes-deployment-plan.md) for the proposed homelab rollout and remaining prerequisites.
+
 ## Accepted technology choices
 
 Python with uv, FastAPI with mounted FastMCP, React/TypeScript/Vite, Keycloak, one PostgreSQL database, and private MinIO object storage. A worker runs the same application code and uses PostgreSQL for its queue. Docker Compose is the deployment model. There is no server-side LLM, Redis, separate search database, student portal, or custom identity system.
@@ -28,3 +30,7 @@ Python with uv, FastAPI with mounted FastMCP, React/TypeScript/Vite, Keycloak, o
 “Must” describes an MVP acceptance requirement; defaults are implementation decisions, not existing behavior. Deferred capabilities are not required for MVP. REST and MCP use shared domain services; exceptions for tutor-only actions are explicit. Agent operations are autonomous except publication of grading proposals. Every feature maps to an ADR, backlog phase, and acceptance scenario in the traceability table.
 
 Changes to scope must update the relevant specification, ADR if architectural, backlog, and traceability row together. Implementation must pin tested dependency/container versions and commit lockfiles; this documentation does not claim that untested latest versions interoperate.
+
+## Container releases
+
+Push to `main` to run checks and publish the combined application image to `ghcr.io/<owner>/<repository>` with automatic commit-based image and Git tags. Production frontend builds default to shared homelab Keycloak. See the [release setup and variables](infra/release/README.md); Kubernetes runtime deployment remains in the homelab repository.

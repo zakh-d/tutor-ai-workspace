@@ -30,3 +30,18 @@ it("shares initialization across concurrent callers", async () => {
   await Promise.all([initializeAuth(), initializeAuth()]);
   expect(mocks.init).toHaveBeenCalledTimes(1);
 });
+
+it("uses the deployment Keycloak build configuration with a same-origin callback", async () => {
+  vi.resetModules();
+  vi.stubEnv("VITE_KEYCLOAK_URL", "https://auth.zahk.tech");
+  vi.stubEnv("VITE_KEYCLOAK_REALM", "tutor");
+  vi.stubEnv("VITE_KEYCLOAK_CLIENT_ID", "tutor-web");
+  vi.stubGlobal("location", { origin: "https://tutor.zahk.tech" });
+  try {
+    const { authConfig, authRedirectUri } = await import("./auth");
+    expect(authConfig).toEqual({ url: "https://auth.zahk.tech", realm: "tutor", clientId: "tutor-web" });
+    expect(authRedirectUri).toBe("https://tutor.zahk.tech/");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
