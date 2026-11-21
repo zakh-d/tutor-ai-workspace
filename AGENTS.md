@@ -16,6 +16,16 @@ Validation: uv run pytest; frontend npm run build and its tests; docker compose 
 5. Use the deterministic gates below before declaring completion. Record exact commands, results, failures, skips, and missing prerequisites; never describe a skipped or unexecuted gate as passed.
 6. Review the final diff, then commit the completed changes with a concise message describing the result. Stage explicit task-owned paths only; exclude secrets, generated artifacts, and unrelated changes. Do not amend or rewrite history unless requested. If checks fail or prerequisites block them, fix what is possible and report the remaining limitation with any checkpoint commit. If Git writes are unavailable, report the blocker instead of claiming a commit. Do not push unless requested.
 
+## Commit messages and release versions
+
+Use Conventional Commit subjects: `type(optional-scope): description`. Commit messages determine automatic image and Git release tags on successful pushes to `main`:
+
+- `feat:` or `feat(scope):` increments the minor version.
+- Breaking changes use `type!:`, `type(scope)!:`, or a `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer and increment the major version.
+- Other changes increment patch; use `fix:` for bug fixes, `docs:` for documentation, `test:` for tests and `chore:` for maintenance.
+
+The first release is `v0.1.0`. Later releases consider all commits since the highest stable release; major takes precedence over minor, then patch. These rules also apply before 1.0. Preserve the appropriate markers in squash-merge messages. Choose the type from the actual change and mark incompatible changes explicitly. Do not manually create release tags or change package versions to drive releases; CI allocates matching `vMAJOR.MINOR.PATCH` image/Git tags. See the [release runbook](infra/release/README.md) and [ADR-012](docs/adr/012-semantic-release-tags.md).
+
 ## Deterministic control gates
 
 Use the existing CI workflow in `.github/workflows/checks.yml` as the baseline. Run gates applicable to the changed behavior; documentation-only changes require diff and Markdown link checks, not application test runs. Before release, run the full application and live integration gates.
