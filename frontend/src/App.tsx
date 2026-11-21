@@ -1290,9 +1290,10 @@ function PublicAssignment({ id }: { id: string }) {
     [csrf, setCsrf] = useState(""),
     [answers, setAnswers] = useState<Record<string, unknown>>({}),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false),
+    [operation, setOperation] = useState<"saving" | "submitting" | "uploading" | "removing" | "reloading" | null>(null),
     [message, setMessage] = useState(""),
     [conflict, setConflict] = useState(false);
+  const busy = operation !== null;
   const apply = (d: PublicData) => {
     requireAssignmentIdentity(id, d.id);
     setData(d);
@@ -1360,72 +1361,55 @@ function PublicAssignment({ id }: { id: string }) {
     return revision;
   }
   async function action(submit = false) {
-    setBusy(true);
+    if (!data || busy) return;
+    setOperation(submit ? "submitting" : "saving");
     setError("");
     setMessage("");
     try {
       const revision = await save();
       if (submit && revision) {
-        await request("/attempt/submit", {
+        const result = await request<{ data: PublicData["attempt"] }>("/attempt/submit", {
           public: true,
           method: "POST",
           revision,
           csrf,
           body: {},
         });
-        apply(await request<PublicData>("/assignment", { public: true }));
+        apply({ ...data, attempt: result.data });
         setMessage("Your work has been submitted.");
       } else setMessage("Draft saved. You can come back to it.");
     } catch (e) {
       setError((e as Error).message);
       if ((e as { status?: number }).status === 409) setConflict(true);
     } finally {
-      setBusy(false);
+      setOperation(null);
     }
   }
   return (
-    <div className="assignment">
-      <a className="brand" href="#">
-        <BookOpen /> atelier<span>practice space</span>
-      </a>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      {conflict && (
-        <div className="notice">
-          <p>
-            This draft changed in another session. Review the server draft
-            before continuing. Your answers remain visible until you choose to
-            reload.
-          </p>
-          <button
-            onClick={async () => {
-              try {
-                apply(await request<PublicData>("/assignment", { public: true }));
-                setConflict(false);
-                setError("");
-              } catch (err) { setError((err as Error).message); }
-            }}
-          >
-            Load server draft
-          </button>
+    <main className="assignment">
+      <div className="brand"><BookOpen aria-hidden="true" /> Atelier</div>
+      {!data ? (
+        <div className="assignment-heading">
+          <h1>Assignment</h1>
+          {error ? <p className="error" role="alert">{error}</p> : <p role="status">Loading assignment…</p>}
         </div>
-      )}
-      {data && (
+      ) : (
         <>
           <div className="assignment-heading">
-            <span className="eyebrow">
-              A LITTLE PRACTICE, A LITTLE PROGRESS
-            </span>
             <h1>{data.title}</h1>
+            <span className="badge">{data.status !== "open" ? "Closed" : formatStatus(data.attempt.status)}</span>
             <p className="preserve">{data.instructions}</p>
             {data.due_at && (
-              <small>Due {new Date(data.due_at).toLocaleString()}</small>
+              <p><time dateTime={data.due_at}>Due {formatDateTime(data.due_at)}</time></p>
             )}
-            <span className="badge">{data.attempt.status}</span>
           </div>
+          {!canEditAssignment(data.status, data.attempt.status) && (
+            <p className="notice" role="status">
+              {data.status !== "open"
+                ? "This assignment is closed. Contact your tutor to continue."
+                : "Your answers have been submitted. Your tutor will share feedback here when it is ready."}
+            </p>
+          )}
           {(data.attachments ?? []).map((file) => (
             <p key={file.id}>
               <a href={"/public/v1/files/" + file.id} download>
@@ -1448,7 +1432,7 @@ function PublicAssignment({ id }: { id: string }) {
                   disabled={readonly || busy || conflict}
                 >
                   <legend>
-                    <span>{String(i + 1).padStart(2, "0")}</span> {q.prompt}{" "}
+                    <span>{i + 1}.</span> {q.prompt}{" "}
                     {q.required && <small>Required</small>}
                   </legend>
                   <small>{q.points} points</small>
@@ -1485,39 +1469,47 @@ function PublicAssignment({ id }: { id: string }) {
                     ))
                   ) : q.type === "file_upload" ? (
                     <>
-                      <input
-                        type="file"
-                        accept={(q.allowed_types ?? ["pdf", "docx", "txt", "png", "jpg", "jpeg"]).map(type => "." + type).join(",")}
-                        disabled={(data.attempt.files ?? []).filter(file => file.question_id === q.id).length >= (q.max_files ?? 3)}
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          setBusy(true);
-                          try {
-                            const body = new FormData();
-                            body.append("question_id", q.id);
-                            body.append("file", file);
-                            await request("/attempt/files", {
-                              public: true,
-                              method: "POST",
-                              body,
-                              revision: (await save()) || data.attempt.revision,
-                              csrf,
-                            });
-                            apply(
-                              await request<PublicData>("/assignment", {
+                      {!readonly && <label className="file-control">
+                        Attach a file
+                        <input
+                          type="file"
+                          name={`file-${q.id}`}
+                          accept={(q.allowed_types ?? ["pdf", "docx", "txt", "png", "jpg", "jpeg"]).map(type => "." + type).join(",")}
+                          disabled={(data.attempt.files ?? []).filter(file => file.question_id === q.id).length >= (q.max_files ?? 3)}
+                          onChange={async (e) => {
+                            const input = e.currentTarget;
+                            const file = input.files?.[0];
+                            if (!file) return;
+                            input.value = "";
+                            setOperation("uploading");
+                            setError("");
+                            setMessage("");
+                            try {
+                              const body = new FormData();
+                              body.append("question_id", q.id);
+                              body.append("file", file);
+                              await request("/attempt/files", {
                                 public: true,
-                              }),
-                            );
-                            setMessage("File attached.");
-                          } catch (err) {
-                            setError((err as Error).message);
-                            if ((err as { status?: number }).status === 409) setConflict(true);
-                          } finally {
-                            setBusy(false);
-                          }
-                        }}
-                      />
+                                method: "POST",
+                                body,
+                                revision: (await save()) || data.attempt.revision,
+                                csrf,
+                              });
+                              apply(
+                                await request<PublicData>("/assignment", {
+                                  public: true,
+                                }),
+                              );
+                              setMessage("File attached.");
+                            } catch (err) {
+                              setError((err as Error).message);
+                              if ((err as { status?: number }).status === 409) setConflict(true);
+                            } finally {
+                              setOperation(null);
+                            }
+                          }}
+                        />
+                      </label>}
                       {(data.attempt.files ?? [])
                         .filter((f) => f.question_id === q.id)
                         .map((file) => (
@@ -1530,8 +1522,9 @@ function PublicAssignment({ id }: { id: string }) {
                                 type="button"
                                 className="text-button"
                                 onClick={async () => {
-                                  setBusy(true);
+                                  setOperation("removing");
                                   setError("");
+                                  setMessage("");
                                   try {
                                     const revision = await save();
                                     await request(
@@ -1549,10 +1542,11 @@ function PublicAssignment({ id }: { id: string }) {
                                         public: true,
                                       }),
                                     );
+                                    setMessage("File removed.");
                                   } catch (err) {
                                     setError((err as Error).message);
                                     if ((err as { status?: number }).status === 409) setConflict(true);
-                                  } finally { setBusy(false); }
+                                  } finally { setOperation(null); }
                                 }}
                               >
                                 Remove
@@ -1575,11 +1569,34 @@ function PublicAssignment({ id }: { id: string }) {
                 </fieldset>
               );
             })}
-            {message && (
-              <p role="status" className="notice">
-                {message}
-              </p>
+            {error && <p className="error" role="alert">{error}</p>}
+            {conflict && (
+              <div className="notice">
+                <p>Your answers are still visible. Load the server version to check the current assignment and continue.</p>
+                <button type="button" disabled={busy} onClick={async () => {
+                  setOperation("reloading");
+                  try {
+                    apply(await request<PublicData>("/assignment", { public: true }));
+                    setConflict(false);
+                    setError("");
+                  } catch (err) {
+                    setError((err as Error).message);
+                  } finally {
+                    setOperation(null);
+                  }
+                }}>
+                  {operation === "reloading" ? "Loading…" : "Load server version"}
+                </button>
+              </div>
             )}
+            <p role="status" className="assignment-feedback">
+              {operation === "saving" ? "Saving draft…"
+                : operation === "submitting" ? "Submitting assignment…"
+                : operation === "uploading" ? "Attaching file…"
+                : operation === "removing" ? "Removing file…"
+                : operation === "reloading" ? "Loading server version…"
+                : message}
+            </p>
             {canEditAssignment(data.status, data.attempt.status) ? (
               <div className="assignment-actions">
                 <button
@@ -1588,22 +1605,18 @@ function PublicAssignment({ id }: { id: string }) {
                   disabled={busy || conflict}
                   onClick={() => action()}
                 >
-                  Save draft
+                  {operation === "saving" ? "Saving draft…" : "Save draft"}
                 </button>
                 <button type="submit" disabled={busy || conflict}>
-                  {busy ? "Saving…" : "Submit assignment"}{" "}
-                  <ArrowUpRight size={16} />
+                  {operation === "submitting" ? "Submitting…" : "Submit assignment"}
+                  <ArrowUpRight size={16} aria-hidden="true" />
                 </button>
                 <p>
                   Submission makes your answers read-only until your tutor
                   reopens the assignment.
                 </p>
               </div>
-            ) : (
-              <div className="notice">
-                {data.status !== "open" ? "This assignment is closed. Contact your tutor to continue." : "Your answers are submitted. Your tutor will share feedback here when it is ready."}
-              </div>
-            )}
+            ) : null}
           </form>
           {data.released_result != null && (
             <section className="panel question">
@@ -1625,8 +1638,7 @@ function PublicAssignment({ id }: { id: string }) {
           )}
         </>
       )}
-      <footer>Your own pace. Your next step.</footer>
-    </div>
+    </main>
   );
 }
 function QuestionEditor({
@@ -2031,10 +2043,7 @@ function AssignmentReview({
       )}
       {notice && (
         <div className="notice">
-          <input value={notice} readOnly aria-label="New assignment link" />
-          <button onClick={() => navigator.clipboard.writeText(notice)}>
-            Copy now
-          </button>
+          {notice.startsWith("http") ? <CopyLink key={notice} url={notice} /> : <p role="status">{notice}</p>}
         </div>
       )}
       <div className="actions">
@@ -2064,12 +2073,15 @@ function AssignmentReview({
       {!attempts.length && <p>No submissions yet.</p>}
       {attempts.map((a) => (
         <button className="secondary" key={a.id} onClick={() => select(a)}>
-          {text(a.status)} · {a.id.slice(0, 8)}
+          {formatStatus(a.status)} {formatDateTime(a.created_at) || a.id.slice(0, 8)}
         </button>
       ))}
       {attempt && (
         <>
-          <pre>{JSON.stringify(attempt, null, 2)}</pre>
+          <details className="technical-details">
+            <summary>Submission details</summary>
+            <pre>{JSON.stringify(attempt, null, 2)}</pre>
+          </details>
           {items.map((item, i) => (
             <div key={item.question_id}>
               <label>

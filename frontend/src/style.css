@@ -384,6 +384,7 @@ nav { margin-top: 16px; }
   font-weight: 400;
 }
 .assignment-actions p { width: 100%; font-size: 13px; }
+.assignment-feedback:not(:empty) { padding: 10px 0; font-weight: 600; }
 .attachment { display: flex; align-items: center; gap: 8px; }
 .question-editor {
   min-width: 0;
