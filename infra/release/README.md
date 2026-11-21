@@ -51,3 +51,9 @@ docker build --build-arg VITE_KEYCLOAK_URL=https://auth.zahk.tech \
 ```
 
 CI also runs actionlint 1.7.7, pinned by container digest, as a non-mutating workflow syntax/shell check. CI runs the regression tests alongside the existing PostgreSQL migration/backend tests, frontend tests/build and Compose validation. Mocked release commands test failure ordering and retry logic, not actual GitHub/GHCR compatibility. First-push publishing is a remaining acceptance gate. See the [deployment plan](../../docs/kubernetes-deployment-plan.md) for realm, MinIO, PostgreSQL, ingress, migrations and restore work owned by homelab. Traefik replaces Caddy in Kubernetes; the image serves HTTP on port 8000 and contains no Caddy server.
+
+## Isolated CI database
+
+GitHub's PostgreSQL service starts with an empty database. Before migrations, CI runs `uv run python infra/ci-database.py prepare` to create the `app` schema owned by its test role and set that role's default search path. CI runs `uv run python -m app.migrate` twice, then `uv run python infra/ci-database.py verify`. Verification fails if expected tables are missing from `app`, application tables appear in `public`, the runtime search path is wrong, or migration version state is missing/ambiguous.
+
+This helper is for the disposable CI database only. Production continues to use the separate migrator/runtime roles and grants in `infra/postgres/init.sh`. Creating schemas inside the application's migration runner would blur that provisioning boundary, so the fix stays in CI setup. The regression gate uses real PostgreSQL and does not require MinIO or Keycloak; their live acceptance checks remain separate.

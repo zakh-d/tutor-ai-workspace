@@ -93,3 +93,24 @@ Executed checks:
 No application pytest, frontend tests/build, PostgreSQL, image rebuild or live integration gates were rerun for this release-helper-only change. Those existing CI gates remain unchanged. No dependency install was needed. Actual GitHub tag permissions, registry publication/copy and deployment remain separate acceptance gates.
 
 Final review: `git diff --check` exited 0 and all 117 relative Markdown links in changed documentation resolved. Complete diff and new ADR reviewed.
+
+## First GitHub run: CI database bootstrap fix — 2026-11-21
+
+Inspected [failed run 44911155138](https://github.com/zakh-d/tutor-ai-workspace/actions/runs/44911155138) through the connected GitHub plugin. Job 136867060056 failed at `uv run python -m app.migrate`: `psycopg.errors.InvalidSchemaName: schema "app" does not exist`. Public API exposed the failed step but unauthenticated log download returned HTTP 403; the connected account provided the full log. Publishing was skipped, so this run provides no GHCR acceptance evidence.
+
+The workflow previously started an empty PostgreSQL database without the schema/role defaults provided by Compose initialization. Added a CI-only bootstrap helper that creates `app` and sets the test role's search path. Production migration/runtime separation remains unchanged. CI now applies migrations twice and verifies table placement, schema resolution and one migration version record before tests. See the [release runbook](../infra/release/README.md) for the provisioning rationale and commands. No new architecture decision or dependencies are introduced.
+
+Executed checks using `python /tmp/tutor-check-ci.py` (temporary local launcher, exit 0):
+
+- Started an isolated `postgres:17.4-bookworm` container with the same database/user as CI and a random loopback-only port. Confirmed the unmodified `PYTHONPATH=backend uv run python -m app.migrate` failed with the same missing-schema error. This was an expected negative reproduction, not a passing migration.
+- `PYTHONPATH=backend uv run python infra/ci-database.py prepare`: exit 0 twice, demonstrating repeatable initialization.
+- `PYTHONPATH=backend uv run python -m app.migrate`: exit 0 twice after bootstrap.
+- `PYTHONPATH=backend uv run python infra/ci-database.py verify`: exit 0; all 10 expected application/version tables in app, none in public, correct runtime schema and version state.
+- `uv run pytest -q`: exit 0, 44 passed / 13 skipped. Skips are existing opt-in integration coverage, not completed live tests.
+- `SCHEDULING_INTEGRATION=1 uv run pytest -q tests/test_scheduling.py`: exit 0, 22 passed using the migrated isolated PostgreSQL database. Both test commands emitted three existing dependency deprecation warnings.
+
+The launcher supplied the isolated `postgresql+psycopg` DATABASE_URL, PYTHONPATH=backend and UV_CACHE_DIR=/tmp/tutor-uv-cache, then removed only its temporary container. It did not touch existing application databases/volumes. Docker/network access required elevated execution.
+
+`docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color` and `docker compose --env-file .env.example config --quiet`: both exit 0. No frontend/runtime image change was made, so frontend tests/build and image rebuild were not repeated. Live smoke, Google, shared Keycloak, MinIO restore and real registry publication remain unexecuted for this fix. A new GitHub run requires pushing the fix; no push was performed.
+
+Final diff reviewed; `git diff --check` exited 0 and all 72 relative links in changed Markdown files resolved.
