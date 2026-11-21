@@ -21,6 +21,8 @@ import { request, type RecordData, type Page } from "./api";
 import { initializeAuth, keycloak, authRedirectUri } from "./auth";
 import { canEditAssignment, requireAssignmentIdentity } from "./public-assignment";
 import { dateValue, describeDue, formatDateTime, formatStatus, loadLessonPlans, loadOpenTasks, loadStudentNames } from "./overview-data";
+import { RecordSummary, ContentPreview, SubmissionAnswers, readableValue } from "./record-display";
+import { SourceEditor } from "./source-editor";
 import { readSection, sectionHref, type WorkspaceSection } from "./workspace-navigation";
 
 const navigationGroups = [
@@ -39,7 +41,6 @@ const navigationGroups = [
     sections: [
       ["Materials", Files],
       ["Homework", BookOpen],
-      ["Assignments", CheckSquare],
       ["Flashcards", Layers],
     ],
   },
@@ -55,7 +56,7 @@ const navigationGroups = [
 type ResourceIntent = { type: "create" } | { type: "detail"; record: RecordData };
 type Navigate = (section: WorkspaceSection, intent?: ResourceIntent) => void;
 const authSectionKey = "atelier-auth-section";
-const authSessionKey = "atelier-session-available";
+const displaySection = (section: WorkspaceSection) => section === "Tasks" ? "My to-dos" : section === "Assignments" ? "Homework" : section;
 
 const routes: Record<string, string> = {
   Students: "students",
@@ -85,8 +86,7 @@ const fields: Record<string, string[]> = {
 };
 const label = (s: string) =>
   s.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase());
-const text = (v: unknown) =>
-  v==null?"":typeof v === "string" ? v : JSON.stringify(v);
+const text = readableValue;
 const initial = (section: string) =>
   section === "Homework"
     ? {
@@ -131,11 +131,10 @@ function Workspace() {
     const directSection = readSection(location.search);
     const callback = new URLSearchParams(location.hash.slice(1));
     const isCallback = callback.has("state") && (callback.has("code") || callback.has("error"));
-    const resumeSession = sessionStorage.getItem(authSessionKey) === "true";
-    if (resumeSession && !isCallback) {
+    if (!isCallback) {
       sessionStorage.setItem(authSectionKey, sectionHref(directSection));
     }
-    initializeAuth(resumeSession)
+    initializeAuth()
       .then((signedIn) => {
         const pendingHref = sessionStorage.getItem(authSectionKey);
         sessionStorage.removeItem(authSectionKey);
@@ -144,8 +143,6 @@ function Workspace() {
           history.replaceState(history.state, "", sectionHref(restored));
           setNavigation({ section: restored });
         }
-        if (signedIn) sessionStorage.setItem(authSessionKey, "true");
-        else sessionStorage.removeItem(authSessionKey);
         setAuth(signedIn);
       })
       .catch((e) => setAuthError(e.message));
@@ -178,7 +175,6 @@ function Workspace() {
     keycloak.login({ redirectUri: authRedirectUri }).catch((e) => setAuthError(e.message));
   }
   function signOut() {
-    sessionStorage.removeItem(authSessionKey);
     sessionStorage.removeItem(authSectionKey);
     void keycloak.logout({ redirectUri: authRedirectUri });
   }
@@ -193,7 +189,7 @@ function Workspace() {
         ) : auth === null ? (
           <p role="status">Connecting securely…</p>
         ) : (
-          <button onClick={signIn}>Sign in <ArrowUpRight size={17} aria-hidden="true" /></button>
+          <button type="button" onClick={signIn}>Sign in <ArrowUpRight size={17} aria-hidden="true" /></button>
         )}
       </section>
     </main>
@@ -214,7 +210,7 @@ function Workspace() {
           <a className="brand" href="/" onClick={(event) => follow(event, "Overview")}>
             <BookOpen aria-hidden="true" /> Atelier
           </a>
-          <button className="secondary menu-toggle" ref={menu} aria-expanded={menuOpen}
+          <button type="button" className="secondary menu-toggle" ref={menu} aria-expanded={menuOpen}
             aria-controls="workspace-navigation" onClick={() => setMenuOpen(!menuOpen)}>
             {menuOpen ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
             Menu
@@ -228,9 +224,9 @@ function Workspace() {
                 <ul>
                   {group.sections.map(([name, Icon]) => (
                     <li key={name}>
-                      <a href={sectionHref(name)} aria-current={section === name ? "page" : undefined}
+                      <a href={sectionHref(name)} aria-current={section === name || (section === "Assignments" && name === "Homework") ? "page" : undefined}
                         onClick={(event) => follow(event, name)}>
-                        <Icon size={18} aria-hidden="true" />{name}
+                        <Icon size={18} aria-hidden="true" />{displaySection(name)}
                       </a>
                     </li>
                   ))}
@@ -240,7 +236,7 @@ function Workspace() {
           </nav>
           <div className="rail-account">
             <strong>{keycloak.tokenParsed?.preferred_username ?? "Tutor"}</strong>
-            <button className="text-button" onClick={signOut}>
+            <button type="button" className="text-button" onClick={signOut}>
               <LogOut size={17} aria-hidden="true" />Sign out
             </button>
           </div>
@@ -252,7 +248,7 @@ function Workspace() {
         ) : section === "Connections" ? (
           <Connections />
         ) : (
-          <Resource key={section} section={section} intent={intent} />
+          <Resource key={section} section={section} intent={intent} navigate={navigate} />
         )}
       </main>
     </div>
@@ -296,7 +292,7 @@ function Overview({ navigate, follow }: {
     <>
       <div className="page-heading">
         <div><h1>Overview</h1><p>{date}</p></div>
-        <button onClick={planLesson}><Plus size={18} aria-hidden="true" />Plan a lesson</button>
+        <button type="button" onClick={planLesson}><Plus size={18} aria-hidden="true" />Plan a lesson</button>
       </div>
       <div className="overview-grid">
         <PreviewPanel title="Lesson plans" destination="Lessons" preview={lessons}
@@ -304,7 +300,7 @@ function Overview({ navigate, follow }: {
           emptyDescription="Start a lesson plan for a student."
           emptyAction={planLesson} emptyActionLabel="Plan a lesson">
           {(lesson) => (
-            <button className="list-row record-button" onClick={() => navigate("Lessons", { type: "detail", record: lesson })}>
+            <button type="button" className="list-row record-button" onClick={() => navigate("Lessons", { type: "detail", record: lesson })}>
               <span className="record-icon"><GraduationCap size={19} aria-hidden="true" /></span>
               <span className="row-copy">
                 <strong>{text(lesson.title)}</strong>
@@ -315,14 +311,14 @@ function Overview({ navigate, follow }: {
             </button>
           )}
         </PreviewPanel>
-        <PreviewPanel title="Open tasks" destination="Tasks" preview={tasks}
-          follow={follow} emptyTitle="No open tasks"
-          emptyDescription="Add a task to keep track of your next step."
-          emptyAction={() => navigate("Tasks", { type: "create" })} emptyActionLabel="Add a task">
+        <PreviewPanel title="My to-dos" destination="Tasks" preview={tasks}
+          follow={follow} emptyTitle="No open to-dos"
+          emptyDescription="Add a private reminder for your next step."
+          emptyAction={() => navigate("Tasks", { type: "create" })} emptyActionLabel="Add a to-do">
           {(task) => {
             const due = describeDue(task.due_at, now);
             return (
-              <button className="list-row record-button" onClick={() => navigate("Tasks", { type: "detail", record: task })}>
+              <button type="button" className="list-row record-button" onClick={() => navigate("Tasks", { type: "detail", record: task })}>
                 <span className="row-copy">
                   <strong>{text(task.title)}</strong>
                   <small className={due.overdue ? "overdue" : undefined} title={formatDateTime(task.due_at) || undefined}>
@@ -366,7 +362,7 @@ function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDe
       ) : "error" in state ? (
         <div className="panel-state">
           <p role="alert">Couldn’t load {title.toLowerCase()}. {state.error}</p>
-          <button className="secondary" onClick={preview.retry}>Retry</button>
+          <button type="button" className="secondary" onClick={preview.retry}>Retry</button>
         </div>
       ) : state.page.items.length ? (
         <>
@@ -394,66 +390,37 @@ function Empty({ title, description, action, actionLabel }: {
     <div className="empty">
       <h3>{title}</h3>
       {description && <p>{description}</p>}
-      {action && <button className="secondary" onClick={action}>{actionLabel}</button>}
+      {action && <button type="button" className="secondary" onClick={action}>{actionLabel}</button>}
     </div>
   );
 }
 
-function Dialog({ title, close, children }: {
-  title: string;
-  close: () => void;
-  children: ReactNode;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const closeButton = useRef<HTMLButtonElement>(null);
-  const headingId = useId();
-  useLayoutEffect(() => {
-    const element = dialog.current!;
-    const opener = document.activeElement;
-    element.showModal();
-    closeButton.current?.focus();
-    return () => {
-      element.close();
-      const target = opener instanceof HTMLElement && opener.isConnected && opener !== document.body
-        ? opener
-        : (document.querySelector<HTMLElement>("[data-dialog-focus]") ?? document.getElementById("workspace-main"));
-      target?.focus();
-    };
-  }, []);
-  useLayoutEffect(() => {
-    closeButton.current?.focus();
-  }, [title]);
-  return (
-    <dialog className="modal" ref={dialog} aria-labelledby={headingId} onCancel={(event) => {
-      event.preventDefault();
-      close();
-    }}>
-      <div className="modal-heading">
-        <h2 id={headingId}>{title}</h2>
-        <button type="button" className="text-button close" ref={closeButton} onClick={close} aria-label="Close dialog">
-          <X size={22} aria-hidden="true" />
-        </button>
-      </div>
-      {children}
-    </dialog>
-  );
+function RecordPage({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useLayoutEffect(() => { heading.current?.focus(); window.scrollTo(0, 0); }, [title]);
+  return <section className="record-page">
+    <button type="button" className="text-button back-link" onClick={close}>‹ Back to list</button>
+    <h1 tabIndex={-1} ref={heading}>{title}</h1>
+    <div className="record-page-body">{children}</div>
+  </section>;
 }
 
 const recordNames: Partial<Record<WorkspaceSection, string>> = {
   Students: "student",
   Lessons: "lesson",
   Materials: "material",
-  Tasks: "task",
+  Tasks: "to-do",
   Homework: "homework template",
   Flashcards: "flashcard set",
 };
 
 function recordTitle(record: Record<string, unknown>, fallback = "Record details") {
-  return text(record.display_name ?? record.title) || fallback;
+  return text(record.display_name ?? record.title ?? (record.content as { title?: string } | undefined)?.title) || fallback;
 }
 
-function Resource({ section, intent }: { section: WorkspaceSection; intent?: ResourceIntent }) {
+function Resource({ section, intent, navigate }: { section: WorkspaceSection; intent?: ResourceIntent; navigate: Navigate }) {
   const [rows, setRows] = useState<RecordData[]>([]);
+  const [studentNames, setStudentNames] = useState<Map<string, string>>(new Map());
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<{ message: string; cursor?: string }>();
@@ -479,6 +446,20 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
     start: new Date().toISOString(),
     end: new Date(Date.now() + 30 * 86400000).toISOString(),
   });
+
+  useEffect(() => {
+    if (section !== "Assignments") return;
+    let active = true;
+    Promise.all([...new Set(rows.map(row => typeof row.student_id === "string" ? row.student_id : "").filter(Boolean))].map(async id => {
+      const response = await request<{data: RecordData}>(`/students/${id}`);
+      return [id, recordTitle(response.data, "Student unavailable")] as const;
+    })).then(names => {if(active) setStudentNames(new Map(names));}).catch(() => {if(active) setStudentNames(new Map());});
+    return () => {active = false;};
+  }, [rows, section]);
+  useEffect(() => {
+    if (intent?.type === "detail") openDetail(intent.record);
+    else if (intent?.type === "create") setEditor(initial(section));
+  }, [intent]);
 
   async function load(next?: string) {
     const sequence = ++loadSequence.current;
@@ -538,6 +519,7 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
     setSelected(null);
     setDetailError("");
     setActionError("");
+    requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-dialog-focus]")?.focus());
   }
   function addRecord() {
     setEditor(initial(section));
@@ -598,18 +580,29 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
 
   return (
     <>
+      {!editor && !detail && <>
       <div className="page-heading">
-        <h1>{section === "Homework" ? "Homework templates" : section}</h1>
+        <div><h1>{displaySection(section)}</h1>
+        {section === "Tasks" && <p>Private reminders for you. To send exercises to a student, use Homework.</p>}
+        </div>
         {recordName && (
-          <button data-dialog-focus onClick={addRecord}>
+          <button type="button" data-dialog-focus onClick={addRecord}>
             <Plus size={17} aria-hidden="true" />{addLabel}
           </button>
         )}
       </div>
+      {["Homework", "Assignments"].includes(section) && <section className="homework-workflow" aria-label="Homework workflow">
+        <ol><li><strong>Create</strong> reusable questions</li><li><strong>Send</strong> a private copy to a student</li><li><strong>Review</strong> answers and share feedback</li></ol>
+        <nav className="workflow-tabs" aria-label="Homework views">
+          <a href={sectionHref("Homework")} aria-current={section === "Homework" ? "page" : undefined} onClick={event => { event.preventDefault(); navigate("Homework"); }}>Create homework</a>
+          <a href={sectionHref("Assignments")} aria-current={section === "Assignments" ? "page" : undefined} onClick={event => { event.preventDefault(); navigate("Assignments"); }}>Sent to students</a>
+        </nav>
+        <p>{section === "Homework" ? "A template holds reusable questions. Open a template to send a private copy to a student." : "Each assignment is a private copy of homework sent to one student. Open it to manage access and review answers."}</p>
+      </section>}
       {result && (
         <div className="notice">
           {result.startsWith("http") ? <CopyLink url={result} /> : <p role="status">{result}</p>}
-          <button className="text-button" onClick={() => setResult("")}>Dismiss</button>
+          <button type="button" className="text-button" onClick={() => setResult("")}>Dismiss</button>
         </div>
       )}
       {section === "Calendar" && <CalendarEditor refresh={() => load()} />}
@@ -618,8 +611,8 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
           <label className="search">
             <Search size={17} aria-hidden="true" />
             <input type="search" name="search-records" autoComplete="off"
-              aria-label={`Search ${section.toLowerCase()}`}
-              placeholder={`Search ${section.toLowerCase()}…`}
+              aria-label={`Search ${displaySection(section).toLowerCase()}`}
+              placeholder={`Search ${displaySection(section).toLowerCase()}…`}
               maxLength={500} value={query} onChange={(event) => {
                 setQuery(event.target.value);
                 if (materialSearch && !event.target.value.trim()) setMaterialSearch("");
@@ -634,7 +627,7 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
             </select>
           )}
           {section === "Materials" && (
-            <button className="secondary" disabled={!query.trim() || archived}
+            <button type="button" className="secondary" disabled={!query.trim() || archived}
               onClick={() => {
                 const term = query.trim();
                 if (materialSearch === term) void load();
@@ -653,26 +646,26 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
             </label>
           )}
         </div>
-        {materialSearch && <p className="preview-note">Text search results for “{materialSearch}” <button className="text-button" onClick={clearFilters}>Clear search</button></p>}
+        {materialSearch && <p className="preview-note">Text search results for “{materialSearch}” <button type="button" className="text-button" onClick={clearFilters}>Clear search</button></p>}
         {loadError && (
           <div className="panel-state">
-            <p className="error" role="alert">Couldn’t load {section.toLowerCase()}. {loadError.message}</p>
-            <button className="secondary" onClick={() => load(loadError.cursor)}>Retry</button>
+            <p className="error" role="alert">Couldn’t load {displaySection(section).toLowerCase()}. {loadError.message}</p>
+            <button type="button" className="secondary" onClick={() => load(loadError.cursor)}>Retry</button>
           </div>
         )}
-        {loading && <p className="panel-state" role="status">Loading {section.toLowerCase()}…</p>}
+        {loading && <p className="panel-state" role="status">Loading {displaySection(section).toLowerCase()}…</p>}
         {visible.length > 0 && (
           <div className="records">
             {visible.map((record) => {
               const due = section === "Tasks" ? describeDue(record.due_at) : null;
-              const summary = text(record.subject ?? record.description ?? record.actor_category);
+              const summary = section === "Assignments" ? studentNames.get(String(record.student_id)) || "Student unavailable" : text(record.subject ?? record.description ?? record.actor_category);
               return (
-                <button className="list-row record-button" key={record.id} onClick={() => openDetail(record)}>
+                <button type="button" className="list-row record-button" key={record.id} onClick={() => openDetail(record)}>
                   <span className="record-icon" aria-hidden="true">
                     {section === "Students" ? text(record.display_name).slice(0, 1) : <BookOpen size={19} />}
                   </span>
                   <span className="row-copy">
-                    <strong>{recordTitle(record, text(record.entity_type ?? record.id))}</strong>
+                    <strong>{recordTitle(record, section === "Assignments" ? "Sent homework" : label(text(record.entity_type) || recordName || "Record"))}</strong>
                     {due ? (
                       <small className={due.overdue && record.status !== "done" ? "overdue" : undefined}>
                         {record.status === "done" && record.due_at ? formatDateTime(record.due_at) : due.text}
@@ -692,30 +685,33 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
               description={cursor ? "Clear the filters or load more records." : undefined}
               action={clearFilters} actionLabel="Clear filters" />
           ) : (
-            <Empty title={`No ${archived ? "archived " : ""}${section.toLowerCase()}${section === "Homework" ? " templates" : ""} yet`}
+            <Empty title={`No ${archived ? "archived " : ""}${displaySection(section).toLowerCase()}${section === "Homework" ? " templates" : ""} yet`}
               action={recordName && !archived ? addRecord : undefined} actionLabel={addLabel} />
           )
         )}
         {cursor && !loadError && (
-          <button className="secondary load-more" disabled={loading} onClick={() => load(cursor)}>
+          <button type="button" className="secondary load-more" disabled={loading} onClick={() => load(cursor)}>
             {loading ? "Loading…" : "Load more"}
           </button>
         )}
       </section>
+      </>}
       {(editor || detail) && (
-        <Dialog title={selectedName} close={closeDialog}>
+        <RecordPage title={selectedName} close={closeDialog}>
           {editor ? (
             <Editor section={section} record={editor} close={closeDialog}
-              saved={() => { closeDialog(); void load(); }} />
+              saved={() => { setResult(`${section === "Tasks" ? "To-do" : label(recordName ?? "Record")} saved.`); closeDialog(); void load(); }} />
           ) : selected ? (
             <div className="detail">
               <RecordSummary record={selected} />
+              <RelatedRecords record={selected} navigate={navigate} />
+              <ContentPreview record={selected} />
               {actionError && <p role="alert" className="error">{actionError}</p>}
               {mutating && <p role="status">Saving changes…</p>}
               <fieldset className="detail-actions" disabled={mutating}>
               {fields[section] && (
                 <>
-                  <button
+                  <button type="button"
                     onClick={() => {
                       setEditor(selected);
                       setSelected(null);
@@ -723,7 +719,7 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
                   >
                     Edit record
                   </button>
-                  <button
+                  <button type="button"
                     className="secondary"
                     onClick={() => {
                       if (!selected.archived_at && !confirm(section === "Students"
@@ -795,7 +791,7 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
                 />
               )}{" "}
               {section === "Flashcards" && (
-                <button
+                <button type="button"
                   className="secondary"
                   onClick={async () => {
                     try {
@@ -812,7 +808,7 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
                 </button>
               )}
               {section === "Activity" && (
-                <button
+                <button type="button"
                   className="secondary"
                   onClick={() => {
                     if (
@@ -830,46 +826,20 @@ function Resource({ section, intent }: { section: WorkspaceSection; intent?: Res
                 </button>
               )}
               </fieldset>
-              <details className="technical-details">
-                <summary>Technical details</summary>
-                <pre>{JSON.stringify(selected, null, 2)}</pre>
-              </details>
+
             </div>
           ) : detailError ? (
             <>
               <p role="alert" className="error">Couldn’t load record details. {detailError}</p>
-              <button className="secondary" onClick={() => {
+              <button type="button" className="secondary" onClick={() => {
                 setDetailError("");
                 setDetailAttempt((attempt) => attempt + 1);
               }}>Retry</button>
             </>
           ) : <p role="status">Loading record details…</p>}
-        </Dialog>
+        </RecordPage>
       )}
     </>
-  );
-}
-
-function RecordSummary({ record }: { record: RecordData }) {
-  const keys = [
-    "status", "due_at", "subject", "level", "description", "plan", "goals", "notes", "instructions",
-    "start", "end", "expires_at", "created_at",
-  ];
-  return (
-    <dl className="record-summary">
-      {keys.filter((key) => record[key]).map((key) => {
-        const formatted = key === "status" ? formatStatus(record[key])
-          : ["due_at", "start", "end", "expires_at", "created_at"].includes(key)
-            ? formatDateTime(record[key]) || text(record[key])
-            : text(record[key]);
-        return (
-          <div key={key}>
-            <dt>{key === "due_at" ? "Due" : label(key)}</dt>
-            <dd className="preserve">{formatted}</dd>
-          </div>
-        );
-      })}
-    </dl>
   );
 }
 
@@ -915,7 +885,7 @@ function Publish({
         });
       }}
     >
-      <h3>Publish assignment</h3>
+      <h3>Send to a student</h3>
       <label>
         Student
         <ReferenceInput
@@ -933,9 +903,9 @@ function Publish({
           onChange={(e) => setDue(e.target.value)}
         />
       </label>
-      <button>Publish & get private link</button>
+      <button type="submit">Send & get private link</button>
       <small>
-        A snapshot of “{text(template.title)}” will be shared with this student.
+        A private copy of “{text(template.title)}” will be shared with this student.
       </small>
     </form>
   );
@@ -964,6 +934,7 @@ function Editor({
   const existing = record as RecordData;
   async function save(e: FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
@@ -1009,17 +980,11 @@ function Editor({
             {error}
           </p>
         )}
+        <fieldset className="editor-fields" disabled={busy}>
         {fields[section].map((field) => {
-          const val = draft[field],
-            json = [
-              "questions",
-              "cards",
-              "source_refs",
-              "tags",
-              "material_ids",
-              "student_ids",
-              "lesson_ids",
-            ].includes(field);
+          const val = draft[field];
+          if (field === "tags") return <label key={field}>Tags<input value={Array.isArray(val) ? val.join(", ") : text(val)} onChange={event => setDraft({ ...draft, tags: event.target.value.split(",").map(tag => tag.trim()).filter(Boolean) })} /><small>Separate tags with commas.</small></label>;
+          if (field === "source_refs") return <SourceEditor key={field} value={Array.isArray(val) ? val : []} change={value => setDraft({ ...draft, source_refs: value })} />;
           if(field==='contact')return <label key={field}>Contact email<input type="email" value={(val as {email?:string}|null)?.email??''} onChange={e=>setDraft({...draft,contact:e.target.value?{email:e.target.value}:null})}/></label>;
           if (["student_id", "lesson_id"].includes(field))
             return (
@@ -1085,8 +1050,7 @@ function Editor({
                     <option key={v} value={v}>{formatStatus(v)}</option>
                   ))}
                 </select>
-              ) : json ||
-                [
+              ) : [
                   "description",
                   "plan",
                   "notes",
@@ -1094,14 +1058,8 @@ function Editor({
                   "instructions",
                 ].includes(field) ? (
                 <textarea
-                  rows={json ? 6 : 3}
-                  value={
-                    json
-                      ? typeof val === "string"
-                        ? val
-                        : JSON.stringify(val ?? [], null, 2)
-                      : text(val)
-                  }
+                  rows={3}
+                  value={text(val)}
                   onChange={(e) =>
                     setDraft({ ...draft, [field]: e.target.value })
                   }
@@ -1120,16 +1078,16 @@ function Editor({
                   }
                 />
               )}{" "}
-              {json && <small>Structured JSON · validated by the server</small>}
             </label>
           );
         })}
         <div className="actions">
-          <button disabled={busy}>{busy ? "Saving…" : "Save changes"}</button>
+          <button type="submit" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button>
           <button type="button" className="secondary" onClick={close}>
             Cancel
           </button>
         </div>
+        </fieldset>
     </form>
   );
 }
@@ -1168,10 +1126,7 @@ function Connections() {
         {connection && (
           <>
             <p>Status: {formatStatus(connection.status)}</p>
-            <details className="technical-details">
-              <summary>Technical details</summary>
-              <pre>{JSON.stringify(connection, null, 2)}</pre>
-            </details>
+            {typeof connection.calendar_name === "string" && <p>Teaching calendar: {connection.calendar_name}</p>}
             {connection.status === "select_calendar" && (
               <CalendarSelection
                 connection={connection}
@@ -1180,7 +1135,7 @@ function Connections() {
             )}
           </>
         )}
-        <button
+        <button type="button"
           onClick={async () => {
             try {
               const r = await request<{
@@ -1206,7 +1161,7 @@ function Connections() {
           Connect Google Calendar <ArrowUpRight size={16} />
         </button>
         {connection && (
-          <button
+          <button type="button"
             className="secondary"
             onClick={async () => {
               try {
@@ -2001,7 +1956,7 @@ function AssignmentReview({
     }
   }
   async function release() {
-    if (!attempt) return;
+    if (!attempt || busy) return;
     setBusy(true);
     try {
       const proposal = await request<{ data: RecordData; revision: number }>(
@@ -2047,21 +2002,21 @@ function AssignmentReview({
         </div>
       )}
       <div className="actions">
-        <button
+        <button type="button"
           disabled={busy}
           className="secondary"
           onClick={() => action("replace-access")}
         >
           Replace private link
         </button>
-        <button
+        <button type="button"
           disabled={busy}
           className="secondary"
           onClick={() => action("revoke-access")}
         >
           Revoke access
         </button>
-        <button
+        <button type="button"
           disabled={busy}
           className="secondary"
           onClick={() => action("reopen")}
@@ -2072,24 +2027,23 @@ function AssignmentReview({
       <h3>Submissions</h3>
       {!attempts.length && <p>No submissions yet.</p>}
       {attempts.map((a) => (
-        <button className="secondary" key={a.id} onClick={() => select(a)}>
-          {formatStatus(a.status)} {formatDateTime(a.created_at) || a.id.slice(0, 8)}
+        <button type="button" className="secondary" key={a.id} onClick={() => select(a)}>
+          {formatStatus(a.status)} {`Attempt ${a.attempt_number ?? attempts.indexOf(a) + 1}`}
         </button>
       ))}
       {attempt && (
         <>
-          <details className="technical-details">
-            <summary>Submission details</summary>
-            <pre>{JSON.stringify(attempt, null, 2)}</pre>
-          </details>
           {items.map((item, i) => (
-            <div key={item.question_id}>
+            <div className="grading-question" key={item.question_id}>
+              <SubmissionAnswers attempt={attempt} content={assignment.content} questionId={item.question_id} download={(path, name) => download(path, name).catch(error => setError(error.message))} />
               <label>
-                Question {i + 1} points
+                Question {i + 1} points (out of {((attempt.questions ?? (assignment.content as {questions?: Question[]} | undefined)?.questions ?? []) as Question[]).find(question => question.id === item.question_id)?.points ?? 100})
                 <input
                   type="number"
                   min="0"
-                  max="100"
+                  max={((attempt.questions ?? (assignment.content as {questions?: Question[]} | undefined)?.questions ?? []) as Question[]).find(question => question.id === item.question_id)?.points ?? 100}
+                  disabled={busy}
+                  readOnly={((attempt.questions ?? (assignment.content as {questions?: Question[]} | undefined)?.questions ?? []) as Question[]).find(question => question.id === item.question_id)?.type.includes("choice")}
                   value={item.awarded_points}
                   onChange={(e) =>
                     setItems(
@@ -2124,15 +2078,14 @@ function AssignmentReview({
               onChange={(e) => setFeedback(e.target.value)}
             />
           </label>
-          <button
+          <button type="button"
             disabled={busy || attempt.status === "draft"}
             onClick={release}
           >
             {busy ? "Saving…" : "Release grades & feedback"}
           </button>
           <p>
-            Objective scores must match the deterministic server score. Students
-            see grades only after release.
+            Multiple-choice scores are calculated automatically. Students see grades only after release.
           </p>
         </>
       )}
@@ -2142,14 +2095,16 @@ function AssignmentReview({
 function CalendarEditor({ refresh }: { refresh: () => void }) {
   const [open, setOpen] = useState(false),
     [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState(""),
+    [operationId, setOperationId] = useState("");
   async function sync() {
     try {
       const r = await request<{ operation_id: string }>("/calendar/sync", {
         method: "POST",
         body: {},
       });
-      setNotice("Refresh queued · " + r.operation_id);
+      setNotice("Calendar refresh queued.");
+      setOperationId(r.operation_id);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -2157,17 +2112,13 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
   return (
     <section className="panel connection">
       <div className="actions">
-        <button className="secondary" onClick={sync}>
+        <button type="button" className="secondary" onClick={sync}>
           Refresh calendar
         </button>
-        <button onClick={() => setOpen(!open)}>Schedule a lesson</button>
+        <button type="button" onClick={() => setOpen(!open)}>Schedule a lesson</button>
       </div>
       {notice && <p className="notice">{notice}</p>}
-      {notice.match(/[0-9a-f]{8}-[0-9a-f-]{27,}/i) && (
-        <OperationMonitor
-          id={notice.match(/[0-9a-f]{8}-[0-9a-f-]{27,}/i)![0]}
-        />
-      )}
+      {operationId && <OperationMonitor id={operationId} />}
       {error && (
         <p className="error" role="alert">
           {error}
@@ -2194,10 +2145,8 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
                   },
                 },
               );
-              setNotice(
-                "Schedule operation queued; Google confirmation is pending · " +
-                  r.operation_id,
-              );
+              setNotice("Lesson scheduled for processing. Waiting for Google confirmation.");
+              setOperationId(r.operation_id);
               setOpen(false);
               refresh();
             } catch (err) {
@@ -2205,14 +2154,7 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
             }
           }}
         >
-          <label>
-            Lesson ID
-            <input name="lesson_id" required />
-          </label>
-          <label>
-            Current lesson revision
-            <input name="lesson_revision" type="number" min="1" required />
-          </label>
+          <LessonFields revisionName="lesson_revision" />
           <label>
             Event title
             <input name="title" required />
@@ -2233,7 +2175,7 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
               required
             />
           </label>
-          <button>Queue calendar event</button>
+          <button type="submit">Queue calendar event</button>
         </form>
       )}
     </section>
@@ -2266,11 +2208,12 @@ function MaterialTools({ material }: { material: RecordData }) {
       )}
       {versions.map((v) => (
         <div className="question-editor" key={v.id}>
-          <strong>{text(v.filename ?? v.id)}</strong>
-          <p>Status: {text(v.status ?? "processing")}</p>
-          <pre>{JSON.stringify(v, null, 2)}</pre>
+          <strong>{text(v.filename) || `Version ${versions.indexOf(v) + 1}`}</strong>
+          <p>Status: {formatStatus(v.conversion_state ?? v.status ?? "processing")}</p>
+          {Array.isArray(v.warnings) && v.warnings.length > 0 && <p>{v.warnings.map(readableValue).join("; ")}</p>}
+          {v.error != null && <p className="error">{readableValue(v.error)}</p>}
           <div className="actions">
-            <button
+            <button type="button"
               className="secondary"
               onClick={() =>
                 download(
@@ -2281,7 +2224,7 @@ function MaterialTools({ material }: { material: RecordData }) {
             >
               Download original
             </button>
-            <button
+            <button type="button"
               className="secondary"
               onClick={async () => {
                 try {
@@ -2305,10 +2248,14 @@ function MaterialTools({ material }: { material: RecordData }) {
         </div>
       ))}
       <label>
-        Artifact ID
-        <input value={artifact} onChange={(e) => setArtifact(e.target.value)} />
+        Extracted text version
+        <select value={artifact} onChange={(event) => { setArtifact(event.target.value); setPreview(""); }}>
+          <option value="">Choose a converted version</option>
+          {material.active_artifact_id != null && <option value={text(material.active_artifact_id)}>Current text</option>}
+          {versions.filter(version => version.artifact_id && version.artifact_id !== material.active_artifact_id).map((version, index) => <option key={version.id} value={text(version.artifact_id)}>{text(version.filename) || `Version ${index + 1}`}</option>)}
+        </select>
       </label>
-      <button
+      <button type="button"
         className="secondary"
         disabled={!artifact}
         onClick={async () => {
@@ -2331,7 +2278,7 @@ function MaterialTools({ material }: { material: RecordData }) {
           onChange={(e) => setPreview(e.target.value)}
         />
       </label>
-      <button
+      <button type="button"
         disabled={!artifact || !preview}
         onClick={async () => {
           try {
@@ -2359,7 +2306,8 @@ function CalendarTools({
   refresh: () => void;
 }) {
   const [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState(""),
+    [operationId, setOperationId] = useState("");
   return (
     <section className="review">
       <h3>Calendar event</h3>
@@ -2369,11 +2317,7 @@ function CalendarTools({
         </p>
       )}
       {notice && <p className="notice">{notice}</p>}
-      {notice.match(/[0-9a-f]{8}-[0-9a-f-]{27,}/i) && (
-        <OperationMonitor
-          id={notice.match(/[0-9a-f]{8}-[0-9a-f-]{27,}/i)![0]}
-        />
-      )}
+      {operationId && <OperationMonitor id={operationId} />}
       <form
         onSubmit={async (e) => {
           e.preventDefault();
@@ -2392,10 +2336,8 @@ function CalendarTools({
                 },
               },
             );
-            setNotice(
-              "Reschedule queued; provider confirmation pending · " +
-                r.operation_id,
-            );
+            setNotice("Time change queued. Waiting for Google confirmation.");
+            setOperationId(r.operation_id);
           } catch (err) {
             setError((err as Error).message);
           }
@@ -2420,7 +2362,7 @@ function CalendarTools({
             required
           />
         </label>
-        <button>Queue reschedule</button>
+        <button type="submit">Queue reschedule</button>
       </form>
       <form
         onSubmit={async (e) => {
@@ -2441,15 +2383,8 @@ function CalendarTools({
           }
         }}
       >
-        <label>
-          Link lesson ID
-          <input name="lesson_id" required />
-        </label>
-        <label>
-          Current lesson revision
-          <input name="revision" type="number" min="1" required />
-        </label>
-        <button className="secondary">Link lesson</button>
+        <LessonFields revisionName="revision" />
+        <button type="submit" className="secondary">Link lesson</button>
       </form>
     </section>
   );
@@ -2498,13 +2433,13 @@ function CalendarSelection({
           <option value="">Choose a writable calendar</option>
           {calendars.map((c) => (
             <option value={c.id} key={c.id}>
-              {text(c.summary ?? c.id)}
+              {text(c.summary) || "Teaching calendar"}
             </option>
           ))}
         </select>
       </label>
       {error && <p className="error">{error}</p>}
-      <button>Use this calendar</button>
+      <button type="submit">Use this calendar</button>
     </form>
   );
 }
@@ -2536,7 +2471,7 @@ function ReferenceInput({
         <option value="">{required ? "Choose a record" : "None"}</option>
         {rows.map((r) => (
           <option value={r.id} key={r.id}>
-            {text(r.display_name ?? r.title ?? r.id)}
+            {recordTitle(r, "Untitled record")}
           </option>
         ))}
       </select>
@@ -2572,7 +2507,7 @@ function ReferenceMultiple({
       >
         {rows.map((r) => (
           <option value={r.id} key={r.id}>
-            {text(r.display_name ?? r.title ?? r.id)}
+            {recordTitle(r, "Untitled record")}
           </option>
         ))}
       </select>
@@ -2609,9 +2544,32 @@ function OperationMonitor({ id }: { id: string }) {
   return (
     <div role="status" className="notice">
       Calendar operation: {result ? text(result.status) : "Checking status…"}
-      {result?.error != null && <p>{text(result.error)}</p>}
+      {result?.error != null && <p>{readableValue(result.error)}</p>}
       {error && <p>{error}</p>}
     </div>
   );
 }
-function StudentProgress({student}:{student:RecordData}){const[records,setRecords]=useState<{kind:string;record:RecordData}[]>([]),[error,setError]=useState('');useEffect(()=>{Promise.all(['lessons','assignments'].map(async kind=>{const r=await request<Page>('/'+kind+'?student_id='+student.id);return r.items.filter(item=>item.student_id===student.id).map(record=>({kind,record}))})).then(rows=>setRecords(rows.flat().sort((a,b)=>text(b.record.created_at).localeCompare(text(a.record.created_at))))).catch(e=>setError(e.message))},[student.id]);return <section className="review"><h3>Learning history</h3>{error&&<p className="error">{error}</p>}{records.length?records.map(({kind,record})=><div className="question-editor" key={record.id}><span className="eyebrow">{kind}</span><h3>{text(record.title??record.id)}</h3><p>{text(record.status)} · {new Date(text(record.created_at)).toLocaleDateString()}</p>{record.release_id!=null&&<span className="badge">Results released</span>}</div>):<p>No linked lessons or assignments yet.</p>}</section>}
+function StudentProgress({student}:{student:RecordData}){const[records,setRecords]=useState<{kind:string;record:RecordData}[]>([]),[error,setError]=useState('');useEffect(()=>{Promise.all(['lessons','assignments'].map(async kind=>{const r=await request<Page>('/'+kind+'?student_id='+student.id);return r.items.filter(item=>item.student_id===student.id).map(record=>({kind,record}))})).then(rows=>setRecords(rows.flat().sort((a,b)=>text(b.record.created_at).localeCompare(text(a.record.created_at))))).catch(e=>setError(e.message))},[student.id]);return <section className="review"><h3>Learning history</h3>{error&&<p className="error">{error}</p>}{records.length?records.map(({kind,record})=><div className="question-editor" key={record.id}><span className="badge">{kind === "assignments" ? "Sent homework" : "Lesson"}</span><h3>{recordTitle(record,kind === "assignments" ? "Sent homework" : "Lesson")}</h3><p>{formatStatus(record.status)}</p>{record.release_id!=null&&<span className="badge">Results released</span>}</div>):<p>No linked lessons or assignments yet.</p>}</section>}
+
+function RelatedRecords({record, navigate}: {record: RecordData; navigate: Navigate}) {
+  const [links, setLinks] = useState<{section: WorkspaceSection; record: RecordData}[]>([]), [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setError(""); setLinks([]);
+    const related: {section: WorkspaceSection; id: string}[] = [];
+    if (record.student_id) related.push({section: "Students", id: String(record.student_id)});
+    if (record.lesson_id) related.push({section: "Lessons", id: String(record.lesson_id)});
+    for (const [field, section] of [["material_ids", "Materials"], ["student_ids", "Students"], ["lesson_ids", "Lessons"]] as const) {
+      if (Array.isArray(record[field])) for (const id of record[field] as string[]) related.push({section, id});
+    }
+    Promise.all(related.map(async ({section, id}) => ({section, record: (await request<{data: RecordData}>(`/${routes[section]}/${id}`)).data}))).then(rows => {if(active) setLinks(rows);}).catch(() => {if(active) setError("Some linked records could not be loaded.");});
+    return () => {active = false;};
+  }, [record.id]);
+  return links.length || error ? <section className="related-records"><h3>Linked records</h3>{links.map(link => <button type="button" className="text-button" key={link.record.id} onClick={() => navigate(link.section, {type: "detail", record: link.record})}>{recordTitle(link.record)} <small>({displaySection(link.section)})</small></button>)}{error && <p role="status">{error}</p>}</section> : null;
+}
+function LessonFields({revisionName}: {revisionName: string}) {
+  const [lessons, setLessons] = useState<RecordData[]>([]), [selected, setSelected] = useState(""), [error, setError] = useState("");
+  useEffect(() => {request<Page>("/lessons?limit=100").then(page => setLessons(page.items)).catch(error => setError(error.message));}, []);
+  const lesson = lessons.find(lesson => lesson.id === selected);
+  return <><label>Lesson<select name="lesson_id" required value={selected} onChange={event => setSelected(event.target.value)}><option value="">Choose a lesson</option>{lessons.map(lesson => <option key={lesson.id} value={lesson.id}>{recordTitle(lesson)}</option>)}</select></label><input type="hidden" name={revisionName} value={lesson?.revision ?? ""} />{error && <p role="alert" className="error">{error}</p>}</>;
+}

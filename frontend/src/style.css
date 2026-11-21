@@ -429,3 +429,33 @@ nav { margin-top: 16px; }
   .record-icon { flex-basis: 28px; height: 28px; }
   .panel-title { padding-inline: 12px; }
 }
+
+/* Records use the workspace's natural page scroll, with room for teaching content. */
+.record-page { max-width: 900px; }
+.record-page > h1 { margin: 12px 0 26px; }
+.record-page > h1:focus { outline: none; }
+.back-link { margin-left: -8px; }
+.record-page-body { background: var(--paper); border: 1px solid var(--rule); border-radius: var(--radius); padding: clamp(16px, 3vw, 30px); }
+.record-page-body label > :where(input, textarea, select):not([type="checkbox"], [type="radio"]) { width: 100%; }
+.record-page-body .review > h2 { font-size: 23px; margin-bottom: 14px; }
+.record-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 28px; }
+.record-summary > div:has(.preserve) { grid-column: 1 / -1; }
+.record-summary dd { max-width: 76ch; }
+.editor-fields { padding: 0; margin: 0; min-width: 0; border: 0; }
+.homework-workflow { margin-bottom: 24px; }
+.homework-workflow ol { display: flex; flex-wrap: wrap; gap: 12px 36px; padding-left: 22px; margin: 0 0 20px; color: var(--muted); }
+.homework-workflow li strong { color: var(--ink); }
+.workflow-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--rule); margin-bottom: 12px; }
+.workflow-tabs a { padding: 10px 0; min-height: 44px; text-decoration: none; color: var(--muted); border-bottom: 3px solid transparent; }
+.workflow-tabs a[aria-current] { color: var(--action); border-color: var(--action); font-weight: 650; }
+.related-records { padding-top: 16px; }
+.related-records .text-button { margin-right: 12px; }
+.source-editor { margin-top: 20px; padding-block: 12px; border-block: 1px solid var(--rule); }
+.source-editor > summary { cursor: pointer; color: var(--action); font-weight: 600; }
+.source-editor > p { margin-top: 10px; }
+.source-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 600px) {
+  .record-summary, .source-range { grid-template-columns: minmax(0, 1fr); }
+  .homework-workflow ol { display: block; }
+  .homework-workflow li + li { margin-top: 6px; }
+}
