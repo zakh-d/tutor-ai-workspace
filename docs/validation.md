@@ -1,0 +1,53 @@
+# Acceptance scenarios and traceability
+
+**Status:** this is the acceptance specification. [Implementation status](implementation-status.md) records executed tests and remaining gates; scenarios below must not all be assumed passed because a subset is covered.
+
+## Scenarios
+
+| ID | Scenario and expected result |
+| --- | --- |
+| T01 | Two tutors with overlapping names/data attempt cross-workspace REST/MCP IDs, foreign references, pagination cursors, search, object downloads, history and job reads. All are denied or not_found; workers never process resources under the wrong workspace. Keycloak/app schema roles cannot read each other's tables. |
+| T02 | Valid tutor and MCP login; wrong issuer/audience/expired token; agent request to tutor-only routes; token refresh; unknown client/redirect. Correct profile works; others fail without fallback. FastMCP mount survives startup/shutdown and metadata discovery; record versions for reference and external clients. |
+| T03 | Create/update retries with same key yield one change; different payload/key reuse conflicts. Missing expected revision is rejected. Concurrent edits permit exactly one winner; stale client rereads rather than overwrites. |
+| T04 | Restore last edit and archive, undo create, retained material version, publication undo after student submission, excluded undo target, newer-change conflict. New audit revisions retain originals/submissions; revoked links stay revoked; grades cannot be released through undo. |
+| T05 | Text PDF/PPTX/DOCX/MD/TXT fixtures convert with original checksums retained; scans/diagrams produce warning/failure rather than fabricated text. Invalid/encrypted files fail visibly. Corrections/reuploads create new artifacts; old citations still resolve. |
+| T06 | Oversized/spoofed/macro-enabled input, decompression bomb, converter timeout, concurrent quota reservation, cross-workspace file IDs, private bucket probes and session expiry during download. Reject safely; no arbitrary network fetch or executable rendering. |
+| T07 | Worker dies before/after external object write; lease expires; stale worker resumes; duplicate job/retry arrives; S3 temporarily fails. Fencing/idempotency produce one active result, visible failure/recovery and cleanup of only unreferenced staging objects. |
+| T08 | Google initial multi-page sync, incremental changes/deletions, token expiry, reauthorization, 410 full-reset, rate limits and disconnect during work. Preserve lesson content and show current pending/error/last-sync state. |
+| T09 | Event create response lost then retried; provider success before DB failure; ETag race; calendar undo after external edit; recurring occurrence, all-day display, DST ambiguity/nonexistent time, attendee-bearing event. No duplicate event or silent overwrite; reject unsafe/unsupported edits and preserve series. |
+| T10 | Publish, lose response/replay, replace/revoke/expire link, forward link, cross-assignment file request, invalid token/session and cache/referrer inspection. Exactly one pinned assignment; explicit replacement for lost token; access restricted to that assignment, no keys/private notes or token leaks. Forwarded valid link works as disclosed. |
+| T11 | Concurrent autosave conflict, wrong question/option, upload too many files, duplicate submit, late submit, closed assignment, reopen and resubmit after template edit. Retain old immutable attempt; current draft uses pinned content; one final attempt per opening. |
+| T12 | Exact single/multiple-choice scoring including unanswered optional questions; agent proposes written/file grades; agent calls release/reopen REST or undo; tutor releases partial/stale/current proposal and corrects release. Only complete current tutor-authorized releases appear publicly; prior results retained. |
+| T13 | Flashcards with tabs/newlines, Unicode, blank fields and invalid references. Export deterministic UTF-8 TSV with two fields per line and no hidden source data; import manually using Quizlet's supported delimiter flow. |
+| T14 | Compose boots using one logical PostgreSQL database and separate schemas plus MinIO; migrations, readiness, restart, backup restore, private ports and redacted logs work. No Redis, second database, hosted LLM, or custom identity store. Restored object references resolve. |
+| T15 | Tutor creates student, lesson and task; links materials, filters due tasks, archives/restores and navigates keyboard/mobile forms with recoverable error. Progress shows linked lessons/submissions/released results; no inaccessible student portal implied. |
+| T16 | Tutor creates student and uploads lesson → agent retrieves bounded cited context → authors/publishes homework → student submits quiz/writing/file → agent proposes grade → tutor releases → student views feedback → tutor asks agent to fix an edit through history. Verify provenance, immutable content and authority at every step. |
+
+## Requirement coverage
+
+Each row names the governing spec, architectural decision, implementation phase and acceptance scenarios. Product feature IDs are defined in [product](product.md).
+
+| Requirement | Specification | Decision | Backlog phase | Scenarios |
+| --- | --- | --- | --- | --- |
+| F01 Students and progress | [Product](product.md), [model](data-model.md) | [ADR-002](adr/002-storage.md), [ADR-003](adr/003-identity.md) | P1, P4 | T01, T15, T16 |
+| F02 Lessons and links | [Product](product.md), [model](data-model.md) | [ADR-001](adr/001-monolith.md), [ADR-007](adr/007-calendar.md) | P1, P3 | T09, T15, T16 |
+| F03 Materials/conversion/search | [Materials](materials-and-jobs.md) | [ADR-002](adr/002-storage.md), [ADR-004](adr/004-processing.md) | P2 | T05, T06, T07 |
+| F04 Google timetable/two-way sync | [Calendar](calendar.md) | [ADR-007](adr/007-calendar.md) | P3 | T08, T09 |
+| F05 Tutor tasks | [Product](product.md), [REST](rest-api.md) | [ADR-001](adr/001-monolith.md), [ADR-005](adr/005-history.md) | P1 | T03, T15 |
+| F06 AI-authored reusable homework | [Assignments](assignments.md), [MCP](mcp.md) | [ADR-006](adr/006-assignments.md), [ADR-008](adr/008-agent-boundary.md) | P4, P5 | T10, T16 |
+| F07 Link access/files/no portal | [Assignments](assignments.md), [security](security.md) | [ADR-006](adr/006-assignments.md) | P4 | T06, T10, T11 |
+| F08 Scoring/proposals/tutor release | [Assignments](assignments.md), [security](security.md) | [ADR-006](adr/006-assignments.md), [ADR-008](adr/008-agent-boundary.md) | P4, P5 | T12, T16 |
+| F09 Quizlet export | [REST](rest-api.md), [MCP](mcp.md) | [ADR-008](adr/008-agent-boundary.md) | P4, P5 | T13 |
+| F10 Version history and agent undo | [History](history.md) | [ADR-005](adr/005-history.md) | P1, P3, P4 | T03, T04, T09 |
+| F11 Autonomous scoped MCP | [MCP](mcp.md), [security](security.md) | [ADR-003](adr/003-identity.md), [ADR-008](adr/008-agent-boundary.md) | P0, P5 | T01, T02, T12, T16 |
+| Python/uv/FastAPI/FastMCP/React | [Architecture](architecture.md) | [ADR-001](adr/001-monolith.md) | P0 | T02, T14 |
+| Keycloak; no custom identity | [Security](security.md) | [ADR-003](adr/003-identity.md) | P0 | T01, T02 |
+| Single DB plus S3; simple monolith | [Architecture](architecture.md) | [ADR-001](adr/001-monolith.md), [ADR-002](adr/002-storage.md) | P0, P2 | T07, T14 |
+| Durable background jobs | [Materials](materials-and-jobs.md) | [ADR-004](adr/004-processing.md) | P2 | T07 |
+| No server-side LLM | [Product](product.md), [MCP](mcp.md) | [ADR-008](adr/008-agent-boundary.md) | P0–P5 | T14, T16 |
+| Private workspaces/English/timezones | [Product](product.md), [security](security.md), [calendar](calendar.md) | [ADR-003](adr/003-identity.md), [ADR-007](adr/007-calendar.md) | P0, P1, P3 | T01, T09, T15 |
+| All requirements/decisions in Markdown | [README](../README.md), this matrix | [ADR index](adr/README.md) | Documentation, maintained P0–P5 | Documentation link/coverage review |
+
+## Documentation review checklist
+
+Verify all relative links resolve; every F01–F11 feature has a row; every ADR and phase is linked; test IDs are unique; accepted/deferred choices are distinguished; interfaces agree on actor authority, mutation preconditions and state transitions. Read through T16 against the contracts, especially lost secret-link responses and grading/undo boundaries. Do not describe these planned scenarios as executed application tests.

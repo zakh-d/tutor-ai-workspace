@@ -1,0 +1,4 @@
+Linear equations
+
+To solve 2x + 6 = 14, subtract 6 from both sides and divide by 2.
+The solution is x = 4. Substitute the value to verify the equality.

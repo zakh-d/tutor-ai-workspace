@@ -1,0 +1,14 @@
+# Opt-in host test access only. Never use this override for public deployment.
+services:
+  postgres:
+    ports:
+      - '127.0.0.1:55432:5432'
+  minio:
+    ports:
+      - '127.0.0.1:59000:9000'
+  keycloak:
+    ports:
+      - '127.0.0.1:58080:8080'
+  app:
+    ports:
+      - '127.0.0.1:58000:8000'
