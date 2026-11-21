@@ -24,3 +24,19 @@ Reviewed baseline `563d479` with a GPT-6.2 Sol UX designer, followed by a separa
 The designer reviewed source and product/REST contracts and confirmed the live app and readiness endpoint were reachable. The designer did not exercise browser layouts or authenticated workflows. Defer a calendar scheduler, backend changes, cross-workspace search, aggregate jobs, comprehensive record routing and replacement of all technical metadata editors.
 
 Implementation and validation results are recorded separately after the developer handoff. Acceptance criteria above are targets, not claims of completed checks.
+
+## Implementation and validation
+
+Implemented in `f3eaf75` (workspace) and `bbd1c27` (student assignment). The Overview uses real filtered lesson/task requests with independent request states. Navigation uses root query parameters and preserves the Keycloak root callback. Native dialogs, responsive navigation, clearer list states, endpoint-bound Materials search pagination and public assignment progress are included. Technical payloads are collapsed where practical.
+
+Executed checks for this pass:
+
+- `uv run pytest`: 26 passed, 9 skipped, 3 dependency deprecation warnings. The nine opt-in PostgreSQL/calendar integration tests were not enabled in this invocation.
+- `docker compose --env-file .env.example config --quiet`: passed. Without an environment file, configuration failed because `S3_SECRET_KEY` was unset.
+- `CURL_CA_BUNDLE=/tmp/tutor-ux-local-ca.crt sh infra/smoke.sh`: passed health/readiness, OAuth discovery and unauthenticated REST rejection against the running stack. The initial attempt lacked local CA trust; verification passed after using the proxy's CA certificate.
+- `npm run build --prefix frontend`, and later `VITE_KEYCLOAK_URL=https://auth.localhost npm run build --prefix frontend`: passed.
+- `npm test --prefix frontend`: 12 tests passed across five files, including navigation, task ordering/due labels and auth initialization regressions.
+- `git diff --check`: passed.
+- `node /tmp/tutor-ux-browser.mjs`: the developer's temporary Chromium smoke harness passed real Keycloak authorization code/PKCE and REST, no horizontal overflow at 375/768/1440px, all 11 mobile destinations and sign-out visibility, editor/detail keyboard focus containment and return, search, Back/Forward and authenticated refresh. It checked real Overview data and ordering, isolated lesson-request failure/retry, public capability exchange and fragment removal, file upload, draft persistence across reload, submission/read-only, closed and unavailable assignment states. A request was deliberately aborted to exercise the failure state.
+
+The Chromium harness served the freshly built HTML/assets at the existing app origin while application/API/auth requests used the running services. This validates the new frontend against the live backend without rebuilding or replacing the deployment. Temporary fixture records were seeded in disposable workspaces; the successful run removed its temporary Keycloak user. The harness is a local scratch script, not a committed reusable test suite. Screenshots were saved outside the repository in the session visualization directory; the coordinator visually inspected desktop Overview and mobile assignment captures. Real Google Calendar provider actions and the skipped opt-in backend suite were not revalidated by this UX pass.
