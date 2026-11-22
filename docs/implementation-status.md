@@ -141,15 +141,3 @@ Frontend and review gates:
 - A temporary bundled component fixture in installed Chromium Headless Shell at 390×844 passed search/committed timezone separation, canonical Warsaw selection, Enter focus without submission, DST-gap invalid outline and blocked submission with focus, required asterisks, and correction to 18:30 followed by successful submission. This was a one-off browser check, not a new CI gate; fixture removed. Initial Vite listening/ordinary Chromium sandbox attempts were blocked or timed out; the standalone headless-shell alternative passed. Physical mobile hardware was not exercised.
 - UX agent reviewed the changed controls; developer review fixed implicit Enter submission, browser timezone alias normalization and invalid-field keyboard focus visibility. Existing Vitest/pytest commands wire deterministic regression coverage into CI without new dependencies.
 
-## PR #1 review follow-up — 2026-11-22
-
-Addressed the review's student-lookup burst and required-answer consistency findings. The overview continues to load/sort/filter all planned lessons, then previews five matches with a link to Lessons; student lookups receive only the visible lesson/task subset. This keeps overview rendering and profile requests bounded without missing chronologically earlier lessons on later pages. Rendering every match or adding a new bulk endpoint was unnecessary for a dashboard preview. The shared preview selector explicitly returns all records when no limit is supplied. The review's claim that `slice(0, undefined)` returns an empty array was incorrect; a real panel rendering regression now covers omitted and explicit limits.
-
-Server finalization now rejects whitespace-only required written responses. Drafts and optional blank responses remain valid; nonblank content retains its original whitespace. Pure domain regressions exercise spaces, tabs/newlines, nonbreaking spaces, optional responses and content preservation. These tests and panel rendering tests run through existing CI commands; no dependencies or auth behavior changed.
-
-Executed checks:
-
-- `npm test --prefix frontend`: exit 0, 38 passed across nine files.
-- `npm run build --prefix frontend`: exit 0, TypeScript and Vite production build (1,579 modules).
-- `UV_CACHE_DIR=/tmp/tutor-ux-uv-cache uv run pytest`: exit 0, 49 passed / 15 skipped, three existing dependency warnings. PostgreSQL/full-stack opt-in tests were skipped. No persistence/schema change was made in this follow-up; PostgreSQL, live-stack, provider and physical-mobile checks were not rerun.
-- Complete task diff reviewed; `git diff --check` passed. Changed Markdown relative links verified before commit.
