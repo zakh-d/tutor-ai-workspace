@@ -1193,7 +1193,7 @@ async function download(path: string, name: string) {
   a.click();
   URL.revokeObjectURL(url);
 }
-function WorkspaceTimezoneSettings({ workspace, saveWorkspace }: { workspace: RecordData; saveWorkspace: (workspace: RecordData) => void }) {
+export function WorkspaceTimezoneSettings({ workspace, saveWorkspace }: { workspace: RecordData; saveWorkspace: (workspace: RecordData) => void }) {
   const [timezone, setTimezone] = useState(text(workspace.timezone));
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
@@ -1220,7 +1220,7 @@ function WorkspaceTimezoneSettings({ workspace, saveWorkspace }: { workspace: Re
         }
       }}>
         <TimezoneField label="Teacher timezone" value={timezone} onChange={setTimezone} required />
-        <button type="submit" disabled={busy || timezone === workspace.timezone}>Save timezone</button>
+        <button type="submit" disabled={busy || (workspace.timezone_configured === true && timezone === workspace.timezone)}>Save timezone</button>
       </form>
       {feedback && <p role="status">{feedback}</p>}
       {error && <p className="error" role="alert">{error}</p>}

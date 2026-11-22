@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PreviewPanel } from "./App";
+import { PreviewPanel, WorkspaceTimezoneSettings } from "./App";
 import { overviewPreviewLimit, previewRecords, selectLessonPlans } from "./overview-data";
 import type { RecordData } from "./api";
 
@@ -34,4 +34,19 @@ it("renders only the same bounded subset used for student lookups", () => {
   expect(markup.match(/<li>/g)).toHaveLength(visible.length);
   expect(markup).toContain("Preview · showing 5 records");
   expect(markup).not.toContain("lesson-5</span>");
+});
+
+
+it.each([false, undefined])("allows explicitly saving unchanged UTC when configured=%s", configured => {
+  const markup = renderToStaticMarkup(<WorkspaceTimezoneSettings workspace={{
+    id: "workspace", revision: 1, timezone: "UTC", timezone_configured: configured,
+  }} saveWorkspace={() => {}} />);
+  expect(markup).toContain('<button type="submit">Save timezone</button>');
+});
+
+it("disables an unchanged timezone only when the preference is already configured", () => {
+  const markup = renderToStaticMarkup(<WorkspaceTimezoneSettings workspace={{
+    id: "workspace", revision: 2, timezone: "UTC", timezone_configured: true,
+  }} saveWorkspace={() => {}} />);
+  expect(markup).toContain('<button type="submit" disabled="">Save timezone</button>');
 });

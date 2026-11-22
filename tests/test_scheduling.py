@@ -338,3 +338,45 @@ def test_public_assignment_has_only_resolved_zone_names_from_the_profiles(client
         http.cookies.set('tutor_assignment', http.cookies.get('tutor_assignment'))
     public = response(http.get('/public/v1/assignment'))
     assert (public['teacher_timezone'], public['student_timezone']) == ('America/New_York', 'Asia/Tokyo')
+
+
+@postgres
+@pytest.mark.parametrize('blank', [' \t\n', '\u00a0'])
+def test_public_submit_rejects_blank_required_written_response(client, blank):
+    from fastapi.testclient import TestClient
+    from contextlib import closing
+    # The session fixture already runs the application's single-use MCP lifespan.
+    with closing(TestClient(app, base_url='https://testserver')) as c:
+        student = c.post('/api/v1/students', json={'display_name': 'Written response'}, headers=headers())
+        assert student.status_code == 201, student.text
+        qid = str(uuid4())
+        template = c.post('/api/v1/homework-templates', headers=headers(), json={
+            'title': 'Required writing', 'instructions': 'Write a response', 'questions': [{
+                'id': qid, 'type': 'written_response', 'prompt': 'Explain', 'required': True,
+                'points': 1, 'max_chars': 100, 'rubric': 'Clear response',
+            }],
+        })
+        assert template.status_code == 201, template.text
+        published = c.post(f"/api/v1/homework-templates/{template.json()['data']['id']}/publish",
+                           json={'student_id': student.json()['data']['id']}, headers=headers(1))
+        assert published.status_code == 201, published.text
+        assignment = published.json()['data']
+        origin = {'Origin': settings().public_base_url}
+        exchange = c.post(f"/public/v1/assignments/{assignment['id']}/session",
+                          json={'token': assignment['access_link'].split('#')[1]}, headers=origin)
+        assert exchange.status_code == 200, exchange.text
+        public_headers = {**origin, 'X-CSRF-Token': exchange.json()['csrf_token']}
+        saved = c.patch('/public/v1/attempt', json={'answers': [{'question_id': qid, 'value': blank}]},
+                        headers={**public_headers, **headers(1)})
+        assert saved.status_code == 200, saved.text
+        submitted = c.post('/public/v1/attempt/submit', headers={**public_headers, **headers(2)})
+        assert submitted.status_code == 422, submitted.text
+        assert submitted.json()['error']['code'] == 'validation_error'
+        draft = c.get('/public/v1/assignment').json()
+        assert draft['attempt']['status'] == 'draft'
+        assert draft['attempt']['revision'] == 2
+        saved = c.patch('/public/v1/attempt', json={'answers': [{'question_id': qid, 'value': '  Valid response\n'}]},
+                        headers={**public_headers, **headers(2)})
+        assert saved.status_code == 200, saved.text
+        submitted = c.post('/public/v1/attempt/submit', headers={**public_headers, **headers(3)})
+        assert submitted.status_code == 200, submitted.text
