@@ -14,20 +14,22 @@ import {
   LogOut,
   ChevronRight,
   Settings,
+  Link,
   Menu,
   X,
 } from "lucide-react";
 import { request, type RecordData, type Page } from "./api";
 import { initializeAuth, keycloak, authRedirectUri } from "./auth";
-import { canEditAssignment, requireAssignmentIdentity } from "./public-assignment";
-import { describeDue, formatStatus, loadLessonPlans, loadOpenTasks } from "./overview-data";
+import { canEditAssignment, firstUnansweredQuestion, requireAssignmentIdentity, requiresAnswer } from "./public-assignment";
+import { describeDue, formatStatus, lessonDays, lessonStart, loadLessonPlans, loadOpenTasks, selectLessonPlans, type LessonDay } from "./overview-data";
 import { RecordSummary, ContentPreview, SubmissionAnswers, readableValue } from "./record-display";
 import { SourceEditor } from "./source-editor";
-import { DateTimeField, TeacherTimezone, TimezoneField, ZonedTime } from "./time-fields";
-import { displayTimeValue, isDateOnly, isTimeZone, resolveDateTime } from "./zoned-time";
+import { DateTimeField, RequiredMark, TeacherTimezone, TimezoneField, ZonedTime } from "./time-fields";
+import { displayTimeValue, endTimeError, isDateOnly, isTimeZone, resolveDateTime } from "./zoned-time";
 import { effectiveStudentTimezone, useStudentTimezones } from "./student-timezones";
 import { StudentSchedules } from "./student-schedules";
 import { readSection, sectionHref, type WorkspaceSection } from "./workspace-navigation";
+import { loadWorkspace } from "./workspace-timezone";
 
 const navigationGroups = [
   {
@@ -52,7 +54,8 @@ const navigationGroups = [
     label: "Administration",
     sections: [
       ["Activity", History],
-      ["Connections", Settings],
+      ["Settings", Settings],
+      ["Connections", Link],
     ],
   },
 ] as const;
@@ -168,11 +171,8 @@ function Workspace() {
   useEffect(() => {
     if (!auth) return;
     let active = true;
-    request<{ data: RecordData }>("/workspace")
-      .then(({ data }) => {
-        if (typeof data.timezone !== "string" || !isTimeZone(data.timezone)) throw new Error("The workspace timezone is unavailable.");
-        if (active) setWorkspace(data);
-      })
+    loadWorkspace()
+      .then(data => { if (active) setWorkspace(data); })
       .catch(error => { if (active) setWorkspaceError(error.message); });
     return () => { active = false; };
   }, [auth, workspaceAttempt]);
@@ -266,8 +266,10 @@ function Workspace() {
           <TeacherTimezone.Provider value={text(workspace.timezone)}>
             {section === "Overview" ? (
               <Overview navigate={navigate} follow={follow} />
+            ) : section === "Settings" ? (
+              <><div className="page-heading"><h1>Settings</h1></div><WorkspaceTimezoneSettings workspace={workspace} saveWorkspace={setWorkspace} /></>
             ) : section === "Connections" ? (
-              <Connections workspace={workspace} saveWorkspace={setWorkspace} />
+              <Connections />
             ) : (
               <Resource key={section} section={section} intent={intent} navigate={navigate} />
             )}
@@ -312,26 +314,33 @@ function Overview({ navigate, follow }: {
 }) {
   const lessons = usePreview(loadLessonPlans);
   const tasks = usePreview(loadOpenTasks);
-  const students = useStudentTimezones([
-    ...(lessons.state && "page" in lessons.state ? lessons.state.page.items.slice(0, 5) : []),
-    ...(tasks.state && "page" in tasks.state ? tasks.state.page.items.slice(0, 5) : []),
-  ]);
+  const [day, setDay] = useState<LessonDay>("All");
   const teacherZone = useContext(TeacherTimezone);
   const now = new Date();
+  const lessonPage = lessons.state && "page" in lessons.state ? {
+    page: { ...lessons.state.page, items: selectLessonPlans(lessons.state.page.items, day, now, teacherZone) },
+  } : lessons.state;
+  const students = useStudentTimezones([
+    ...(lessonPage && "page" in lessonPage ? lessonPage.page.items : []),
+    ...(tasks.state && "page" in tasks.state ? tasks.state.page.items.slice(0, 5) : []),
+  ]);
   const date = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeZone: teacherZone }).format(now);
   const planLesson = () => navigate("Lessons", { type: "create" });
 
   return (
     <>
       <div className="page-heading">
-        <div><h1>Overview</h1><p>{date}</p></div>
+        <div><h1>Overview</h1><p>{date} · <a href={sectionHref("Settings")} onClick={event => follow(event, "Settings")}>Teacher timezone ({teacherZone})</a></p></div>
         <button type="button" onClick={planLesson}><Plus size={18} aria-hidden="true" />Plan a lesson</button>
       </div>
       <div className="overview-grid">
-        <PreviewPanel title="Lesson plans" destination="Lessons" preview={lessons}
-          follow={follow} emptyTitle="No planned lessons"
-          emptyDescription="Start a lesson plan for a student."
-          emptyAction={planLesson} emptyActionLabel="Plan a lesson">
+        <PreviewPanel title="Lesson plans" destination="Lessons" preview={{ ...lessons, state: lessonPage }}
+          follow={follow} emptyTitle={day === "All" ? "No planned lessons" : `No planned lessons ${day.toLowerCase()}`}
+          emptyAction={planLesson} emptyActionLabel="Plan a lesson"
+          controls={<div className="lesson-day-filter" role="group" aria-label="Lesson day">
+            {lessonDays.map(option => <button className="secondary" key={option} type="button"
+              aria-pressed={day === option} onClick={() => setDay(option)}>{option}</button>)}
+          </div>}>
           {(lesson) => (
             <button type="button" className="list-row record-button" onClick={() => navigate("Lessons", { type: "detail", record: lesson })}>
               <span className="record-icon"><GraduationCap size={19} aria-hidden="true" /></span>
@@ -349,7 +358,7 @@ function Overview({ navigate, follow }: {
         <PreviewPanel title="My to-dos" destination="Tasks" preview={tasks}
           follow={follow} emptyTitle="No open to-dos"
           emptyDescription="Add a private reminder for your next step."
-          emptyAction={() => navigate("Tasks", { type: "create" })} emptyActionLabel="Add a to-do">
+          emptyAction={() => navigate("Tasks", { type: "create" })} emptyActionLabel="Add a to-do" limit={5}>
           {(task) => {
             const due = describeDue(task.due_at, now, teacherZone);
             return (
@@ -371,16 +380,18 @@ function Overview({ navigate, follow }: {
   );
 }
 
-function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDescription, emptyAction, emptyActionLabel, children }: {
+function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDescription, emptyAction, emptyActionLabel, children, controls, limit }: {
   title: string;
   destination: WorkspaceSection;
   preview: ReturnType<typeof usePreview>;
   follow: (event: MouseEvent<HTMLAnchorElement>, section: WorkspaceSection) => void;
   emptyTitle: string;
-  emptyDescription: string;
+  emptyDescription?: string;
   emptyAction: () => void;
   emptyActionLabel: string;
   children: (record: RecordData) => ReactNode;
+  controls?: ReactNode;
+  limit?: number;
 }) {
   const headingId = useId();
   const state = preview.state;
@@ -392,6 +403,7 @@ function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDe
           View {destination.toLowerCase()} <ArrowUpRight size={15} aria-hidden="true" />
         </a>
       </div>
+      {controls}
       {!state ? (
         <p className="panel-state" role="status">Loading {title.toLowerCase()}…</p>
       ) : "error" in state ? (
@@ -401,11 +413,11 @@ function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDe
         </div>
       ) : state.page.items.length ? (
         <>
-          {(state.page.next_cursor || state.page.items.length > 5) && (
-            <p className="preview-note">Preview · showing {Math.min(5, state.page.items.length)} records</p>
+          {limit !== undefined && (state.page.next_cursor || state.page.items.length > limit) && (
+            <p className="preview-note">Preview · showing {Math.min(limit, state.page.items.length)} records</p>
           )}
           <ul className="preview-list">
-            {state.page.items.slice(0, 5).map((record) => <li key={record.id}>{children(record)}</li>)}
+            {state.page.items.slice(0, limit).map((record) => <li key={record.id}>{children(record)}</li>)}
           </ul>
         </>
       ) : (
@@ -451,10 +463,6 @@ const recordNames: Partial<Record<WorkspaceSection, string>> = {
 
 function recordTitle(record: Record<string, unknown>, fallback = "Record details") {
   return text(record.display_name ?? record.title ?? (record.content as { title?: string } | undefined)?.title) || fallback;
-}
-
-function lessonStart(lesson: RecordData) {
-  return lesson.calendar_event_id ? lesson.calendar_start : lesson.starts_at;
 }
 
 function Resource({ section, intent, navigate }: { section: WorkspaceSection; intent?: ResourceIntent; navigate: Navigate }) {
@@ -941,7 +949,7 @@ function Publish({
     >
       <h3>Send to a student</h3>
       <label>
-        Student
+        <span>Student<RequiredMark /></span>
         <ReferenceInput
           route="students"
           value={student}
@@ -979,6 +987,8 @@ function Editor({
   const studentZone = students.timezone(draft);
   const nativeTiming = section === "Lessons" && !existing.calendar_event_id;
   const lessonZone = (typeof draft.timezone === "string" ? draft.timezone : teacherZone);
+  const start = text(draft.starts_at);
+  const end = text(draft.ends_at);
   async function save(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
@@ -1058,7 +1068,9 @@ function Editor({
           if (["student_id", "lesson_id"].includes(field))
             return (
               <label key={field}>
-                {field === "student_id" ? "Student" : "Lesson"}
+                <span>{field === "student_id" ? "Student" : "Lesson"}
+                  {section === "Lessons" && field === "student_id" && !existing.schedule_id && <RequiredMark />}
+                </span>
                 {section === "Lessons" && field === "student_id" && existing.schedule_id ?
                   <span>{text(student?.display_name) || "Original student"}</span> :
                   <ReferenceInput
@@ -1104,7 +1116,7 @@ function Editor({
             );
           return (
             <label key={field}>
-              {label(field)}
+              <span>{label(field)}{["title", "display_name"].includes(field) && <RequiredMark />}</span>
               {field === "status" ? (
                 <select
                   value={text(
@@ -1137,10 +1149,7 @@ function Editor({
                 />
               ) : (
                 <input
-                  required={
-                    ["title", "display_name"].includes(field) ||
-                    (section === "Lessons" && field === "student_id")
-                  }
+                  required={["title", "display_name"].includes(field)}
                   type="text"
                   name={field}
                   value={text(val)}
@@ -1154,10 +1163,11 @@ function Editor({
         })}
         {nativeTiming && <>
           <TimezoneField label="Lesson timezone" value={lessonZone} onChange={timezone => setDraft({ ...draft, timezone })} required />
-          <DateTimeField label="Start" value={text(draft.starts_at)} onChange={starts_at => setDraft({ ...draft, starts_at })}
-            inputZone={lessonZone} studentZone={studentZone} required={Boolean(existing.schedule_id)} />
-          <DateTimeField label="End" value={text(draft.ends_at)} onChange={ends_at => setDraft({ ...draft, ends_at })}
-            inputZone={lessonZone} studentZone={studentZone} required={Boolean(existing.schedule_id)} />
+          <DateTimeField label="Start" value={start} onChange={starts_at => setDraft({ ...draft, starts_at })}
+            inputZone={lessonZone} studentZone={studentZone} required={Boolean(existing.schedule_id || end)} />
+          <DateTimeField label="End" value={end} onChange={ends_at => setDraft({ ...draft, ends_at })}
+            inputZone={lessonZone} studentZone={studentZone} required={Boolean(existing.schedule_id || start)}
+            rangeError={endTimeError(start, end, lessonZone)} />
         </>}
         {section === "Lessons" && Boolean(existing.calendar_event_id) && <p>To reschedule this lesson, open its linked Google Calendar event.</p>}
         <div className="actions">
@@ -1217,7 +1227,7 @@ function WorkspaceTimezoneSettings({ workspace, saveWorkspace }: { workspace: Re
     </section>
   );
 }
-function Connections({ workspace, saveWorkspace }: { workspace: RecordData; saveWorkspace: (workspace: RecordData) => void }) {
+function Connections() {
   const [error, setError] = useState(""),
     [connection, setConnection] = useState<RecordData | null>(null);
   useEffect(() => {
@@ -1230,7 +1240,6 @@ function Connections({ workspace, saveWorkspace }: { workspace: RecordData; save
       <div className="page-heading">
         <h1>Connections</h1>
       </div>
-      <WorkspaceTimezoneSettings workspace={workspace} saveWorkspace={saveWorkspace} />
       <section className="panel connection">
         <h2>Google Calendar</h2>
         <p>
@@ -1363,7 +1372,8 @@ function PublicAssignment({ id }: { id: string }) {
     [error, setError] = useState(""),
     [operation, setOperation] = useState<"saving" | "submitting" | "uploading" | "removing" | "reloading" | null>(null),
     [message, setMessage] = useState(""),
-    [conflict, setConflict] = useState(false);
+    [conflict, setConflict] = useState(false),
+    [validateAnswers, setValidateAnswers] = useState(false);
   const busy = operation !== null;
   const apply = (d: PublicData) => {
     requireAssignmentIdentity(id, d.id);
@@ -1431,8 +1441,14 @@ function PublicAssignment({ id }: { id: string }) {
     setData({ ...data, attempt: { ...data.attempt, revision } });
     return revision;
   }
-  async function action(submit = false) {
+  async function action(submit = false, form?: HTMLFormElement) {
     if (!data || busy) return;
+    const missingIndex = firstUnansweredQuestion(data.questions, answers, submit);
+    if (submit) setValidateAnswers(true);
+    if (missingIndex !== -1) {
+      form?.querySelector<HTMLElement>(`[data-question-index="${missingIndex}"] :is(input, textarea)`)?.focus();
+      return;
+    }
     setOperation(submit ? "submitting" : "saving");
     setError("");
     setMessage("");
@@ -1498,20 +1514,25 @@ function PublicAssignment({ id }: { id: string }) {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              action(true);
+              action(true, e.currentTarget);
             }}
           >
             {data.questions.map((q, i) => {
               const readonly = !canEditAssignment(data.status, data.attempt.status);
+              const invalid = !readonly && validateAnswers && requiresAnswer(q, answers);
+              const errorId = `assignment-answer-error-${i}`;
               return (
                 <fieldset
                   className="panel question"
                   key={q.id}
                   disabled={readonly || busy || conflict}
+                  data-question-index={i}
+                  aria-invalid={invalid || undefined}
+                  aria-describedby={invalid ? errorId : undefined}
                 >
                   <legend>
                     <span>{i + 1}.</span> {q.prompt}{" "}
-                    {q.required && <small>Required</small>}
+                    {q.required && <><RequiredMark /><span className="sr-only"> Required</span></>}
                   </legend>
                   <small>{q.points} points</small>
                   {["single_choice", "multiple_choice"].includes(q.type) ? (
@@ -1636,6 +1657,9 @@ function PublicAssignment({ id }: { id: string }) {
                   ) : (
                     <textarea
                       aria-label={q.prompt}
+                      aria-required={q.required}
+                      aria-invalid={invalid || undefined}
+                      aria-describedby={invalid ? errorId : undefined}
                       rows={6}
                       maxLength={q.max_chars ?? 10000}
                       value={text(answers[q.id])}
@@ -1644,6 +1668,9 @@ function PublicAssignment({ id }: { id: string }) {
                       }
                     />
                   )}
+                  {invalid && <p className="field-error" id={errorId} role="alert">
+                    {q.type === "file_upload" ? "Attach a file." : "Answer this required question."}
+                  </p>}
                 </fieldset>
               );
             })}
@@ -1819,7 +1846,7 @@ function QuestionEditor({
             </select>
           </label>
           <label>
-            Prompt
+            <span>Prompt<RequiredMark /></span>
             <textarea
               required
               value={q.prompt}
@@ -1846,6 +1873,7 @@ function QuestionEditor({
           </label>
           {q.options?.map((o, j) => (
             <div className="option-edit" key={o.id}>
+              <RequiredMark />
               <input
                 aria-label={`Option ${j + 1}`}
                 required
@@ -1950,7 +1978,7 @@ function CardEditor({
       {cards.map((card, i) => (
         <div className="question-editor" key={i}>
           <label>
-            Term
+            <span>Term<RequiredMark /></span>
             <input
               required
               value={card.term}
@@ -1964,7 +1992,7 @@ function CardEditor({
             />
           </label>
           <label>
-            Definition
+            <span>Definition<RequiredMark /></span>
             <textarea
               required
               value={card.definition}
@@ -2309,12 +2337,13 @@ function CalendarEditor({ refresh }: { refresh: () => void }) {
             setEnd(text(record?.ends_at));
           }} />
           <label>
-            Event title
+            <span>Event title<RequiredMark /></span>
             <input name="title" required />
           </label>
           <TimezoneField label="Event timezone" value={timezone} onChange={setTimezone} required />
           <DateTimeField label="Start" value={start} onChange={setStart} inputZone={timezone} studentZone={studentZone} required />
-          <DateTimeField label="End" value={end} onChange={setEnd} inputZone={timezone} studentZone={studentZone} required />
+          <DateTimeField label="End" value={end} onChange={setEnd} inputZone={timezone} studentZone={studentZone}
+            required rangeError={endTimeError(start, end, timezone)} />
           <button type="submit">Queue calendar event</button>
         </form>
       )}
@@ -2490,7 +2519,8 @@ function CalendarTools({ event, studentZone, refresh }: {
       }}>
         <TimezoneField label="Event timezone" value={timezone} onChange={setTimezone} required />
         <DateTimeField label="New start" value={start} onChange={setStart} inputZone={timezone} studentZone={studentZone} required />
-        <DateTimeField label="New end" value={end} onChange={setEnd} inputZone={timezone} studentZone={studentZone} required />
+        <DateTimeField label="New end" value={end} onChange={setEnd} inputZone={timezone} studentZone={studentZone}
+          required rangeError={endTimeError(start, end, timezone)} />
         <button type="submit" disabled={submitting}>Queue reschedule</button>
       </form>}
       {!event.lesson_id && !event.deleted && <form onSubmit={async (e) => {
@@ -2552,7 +2582,7 @@ function CalendarSelection({
       }}
     >
       <label>
-        Select your teaching calendar
+        <span>Select your teaching calendar<RequiredMark /></span>
         <select
           required
           value={selected}
@@ -2763,7 +2793,7 @@ function LessonFields({ revisionName, change }: { revisionName: string; change?:
   }, []);
   const lesson = lessons.find(lesson => lesson.id === selected);
   return <>
-    <label>Lesson
+    <label><span>Lesson<RequiredMark /></span>
       <select name="lesson_id" required value={selected} onChange={event => {
         setSelected(event.target.value);
         change?.(lessons.find(lesson => lesson.id === event.target.value));

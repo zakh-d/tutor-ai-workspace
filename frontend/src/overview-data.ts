@@ -1,5 +1,5 @@
 import { request, type Page, type RecordData } from "./api";
-import { plainDateInZone } from "./zoned-time";
+import { shiftDate, displayTimeValue, isDateOnly, plainDateInZone, wallTimeChoices } from "./zoned-time";
 
 const statusNames: Record<string, string> = {
   todo: "To do",
@@ -42,8 +42,41 @@ export function selectOpenTasks(pages: Page[]): Page {
   };
 }
 
-export function loadLessonPlans() {
-  return request<Page>("/lessons?archived=false&status=planned&limit=5");
+export function lessonStart(lesson: RecordData) {
+  return lesson.calendar_event_id ? lesson.calendar_start : lesson.starts_at;
+}
+
+export const lessonDays = ["Today", "Tomorrow", "All"] as const;
+export type LessonDay = (typeof lessonDays)[number];
+
+export function selectLessonPlans(lessons: RecordData[], day: LessonDay, now: Date, teacherZone: string) {
+  const today = plainDateInZone(now, teacherZone);
+  const selectedDate = day === "Tomorrow" ? shiftDate(today, 1) : today;
+  return lessons.map(lesson => {
+    const value = displayTimeValue(lessonStart(lesson));
+    const dateOnly = isDateOnly(value);
+    const instant = dateOnly
+      ? Date.parse(wallTimeChoices(value + "T00:00", teacherZone)[0]?.instant ?? value)
+      : Date.parse(value);
+    const date = dateOnly ? value : Number.isFinite(instant) ? plainDateInZone(new Date(instant), teacherZone) : "";
+    return { lesson, instant: Number.isFinite(instant) ? instant : Infinity, date };
+  })
+    .filter(row => day === "All" || row.date === selectedDate)
+    .sort((a, b) => a.instant === b.instant ? a.lesson.id.localeCompare(b.lesson.id) : a.instant - b.instant)
+    .map(row => row.lesson);
+}
+
+export async function loadLessonPlans(): Promise<Page> {
+  const lessons = new Map<string, RecordData>();
+  const params = new URLSearchParams({ archived: "false", status: "planned", limit: "100" });
+  let cursor: string | null;
+  do {
+    const page = await request<Page>(`/lessons?${params}`);
+    for (const lesson of page.items) lessons.set(lesson.id, lesson);
+    cursor = page.next_cursor;
+    if (cursor) params.set("cursor", cursor);
+  } while (cursor);
+  return { items: [...lessons.values()], next_cursor: null };
 }
 
 export async function loadOpenTasks() {

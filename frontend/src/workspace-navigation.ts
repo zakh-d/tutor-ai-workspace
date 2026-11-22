@@ -9,6 +9,7 @@ const sectionSlugs = {
   Assignments: "assignments",
   Flashcards: "flashcards",
   Activity: "activity",
+  Settings: "settings",
   Connections: "connections",
 } as const;
 

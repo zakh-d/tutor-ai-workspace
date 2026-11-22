@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request, Response, UploadFile, File, For
 from sqlalchemy import select, update
 from .db import Session, Workspace, Record, Revision, Access, Job, now
 from .auth import authenticate
+from .config import settings
 from .errors import require, DomainError
 from . import schemas as S
 from .scheduling import generate_schedule
@@ -29,20 +30,51 @@ def headers(request):
         except ValueError: raise DomainError('validation_error','Invalid If-Match revision.')
     return key,revision
 
+def workspace_settings(w):
+    return {
+        'id': w.id, 'name': w.name, 'timezone': w.timezone,
+        'timezone_configured': w.timezone_configured, 'revision': w.revision,
+    }
+
+
 @router.get('/workspace')
 def workspace_get(ctx=Depends(context)):
-    db,w,a=ctx; a.permit('workspace:read')
-    return {'data':{'id':w.id,'name':w.name,'timezone':w.timezone,'revision':w.revision,'contract_version':'1','capabilities':{'calendar':True,'grading_release':a.client_id==__import__('app.config',fromlist=['settings']).settings().tutor_client_id},'limits':{'tutor_upload_bytes':25*1024**2,'student_upload_bytes':10*1024**2,'chunk_count':20}}}
+    _, workspace, actor = ctx
+    actor.permit('workspace:read')
+    return {'data': {
+        **workspace_settings(workspace),
+        'contract_version': '1',
+        'capabilities': {
+            'calendar': True,
+            'grading_release': actor.client_id == settings().tutor_client_id,
+        },
+        'limits': {'tutor_upload_bytes': 25 * 1024**2, 'student_upload_bytes': 10 * 1024**2, 'chunk_count': 20},
+    }}
+
+
 @router.patch('/workspace')
-def workspace_patch(body:S.WorkspacePatch,request:Request,ctx=Depends(context)):
-    db,w,a=ctx; a.permit('workspace:write'); key,rev=headers(request)
-    op,replay=begin(db,w.id,a,key,'workspace',body.model_dump(mode='json',exclude_unset=True),rev)
-    if replay:return replay
-    w=db.scalar(select(Workspace).where(Workspace.id==w.id).with_for_update()); expected(w,rev)
-    if body.timezone:w.timezone=body.timezone
-    if body.name:w.name=body.name
-    w.revision+=1
-    result={'data':{'id':w.id,'name':w.name,'timezone':w.timezone,'revision':w.revision},'revision':w.revision,'operation_id':op.id};op.result=result;return result
+def workspace_patch(body: S.WorkspacePatch, request: Request, ctx=Depends(context)):
+    db, workspace, actor = ctx
+    actor.permit('workspace:write')
+    key, revision = headers(request)
+    payload = body.model_dump(mode='json', exclude_unset=True)
+    operation, replay = begin(db, workspace.id, actor, key, 'workspace', payload, revision)
+    if replay:
+        return replay
+    workspace = db.scalar(
+        select(Workspace).where(Workspace.id == workspace.id)
+        .with_for_update().execution_options(populate_existing=True)
+    )
+    expected(workspace, revision)
+    if body.timezone:
+        workspace.timezone = body.timezone
+        workspace.timezone_configured = True
+    if body.name:
+        workspace.name = body.name
+    workspace.revision += 1
+    result = {'data': workspace_settings(workspace), 'revision': workspace.revision, 'operation_id': operation.id}
+    operation.result = result
+    return result
 
 def project_lesson_calendar(db, workspace_id, actor, lessons):
     if 'calendar:read' not in actor.scopes:

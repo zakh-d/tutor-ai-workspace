@@ -16,7 +16,7 @@ Paths below are relative to `/api/v1`; braces denote UUIDs. `GET collection`, `P
 
 | Route family | Inputs and operations |
 | --- | --- |
-| `/workspace` | GET settings; PATCH name/timezone. Owner identity is immutable. |
+| `/workspace` | GET settings (including read-only `timezone_configured: boolean`); PATCH name/timezone. Supplying timezone marks it configured, including UTC. Owner identity is immutable. |
 | `/students` | CRUD; display_name (1–200 chars), contact?, subject?, level?, goals?, notes?, timezone? (validated IANA, null/omitted uses workspace). Filters: archived. |
 | `/lessons` | CRUD; student_id, title, plan?, notes?, status, material_ids[], starts_at?/ends_at? (offset-aware pair), timezone? (required for timed lessons). Read-only schedule_id/occurrence_date provenance. Filters: student_id/status/schedule_id/archived. Calendar linkage uses the calendar routes. |
 | `/schedules` | CRUD; student_id, title, weekdays[] (unique 0 Monday–6 Sunday), local_start (HH:MM), timezone (IANA), duration_minutes (integer 1–1440), start_date, end_date? (inclusive dates). Filters: student_id/archived. Server-owned generated_through. POST `/{id}/generate` with `{through_date: date}` and current If-Match. |
@@ -75,3 +75,5 @@ Public routes and capability request shapes are specified separately in [assignm
 Generation returns the standard mutation envelope; `data` contains the updated schedule plus `generated_lessons[]` and `skipped_occurrences[]` (`occurrence_date`, `reason`: `nonexistent_local_time` or `ambiguous_local_time`). Scan from start_date or the day after generated_through, at most 93 calendar days per call, clamped by end_date. Persist lessons and watermark atomically; retries replay and overlapping calls never reset moved/cancelled/archived lessons. Rule edits affect only ungenerated dates. Schedule timezone is independent of later student timezone edits. Standard lesson updates move/cancel a local occurrence; linked provider timing must use calendar operations. See [ADR-010](adr/010-student-timezones-and-schedules.md).
 
 Calendar event reads expose safe `lesson_id`/`student_id` associations when linked; `GET /calendar/events/{id}` reads a cached occurrence outside the current timetable range. The public assignment projection includes resolved `teacher_timezone` and `student_timezone` solely for deadline display.
+
+Browser initialization: when `timezone_configured` is false, the authenticated website saves its detected IANA timezone using the normal PATCH preconditions. A configured preference is never replaced automatically. Legacy non-UTC or revision-greater-than-one settings are preserved as configured; untouched UTC workspaces are initialized on next browser use. See [ADR-013](adr/013-scheduling-usability.md).

@@ -4,7 +4,7 @@
 
 Remote endpoint: `https://<app-host>/mcp`, Streamable HTTP, Keycloak authorization as defined in [security](security.md). Tools expose domain operations, not arbitrary SQL, filesystem access, shell commands or network fetches. All tools use the same service schemas as [REST](rest-api.md). Tools return structured content; potentially large text is bounded. Tool descriptions identify read-only, mutation and external-effect behavior. Annotations help clients but are not security controls.
 
-At connection, `workspace_get` reports workspace name/timezone, capability flags, configured limits and contract version `1`. Do not include credentials or imply the agent has tools it was not granted. Every call derives workspace and client identity from the token.
+At connection, `workspace_get` reports workspace name/timezone and read-only `timezone_configured` preference provenance, capability flags, configured limits and contract version `1`. Do not include credentials or imply the agent has tools it was not granted. Every call derives workspace and client identity from the token.
 
 ## Types and shared fields
 

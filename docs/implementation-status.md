@@ -114,3 +114,29 @@ The launcher supplied the isolated `postgresql+psycopg` DATABASE_URL, PYTHONPATH
 `docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color` and `docker compose --env-file .env.example config --quiet`: both exit 0. No frontend/runtime image change was made, so frontend tests/build and image rebuild were not repeated. Live smoke, Google, shared Keycloak, MinIO restore and real registry publication remain unexecuted for this fix. A new GitHub run requires pushing the fix; no push was performed.
 
 Final diff reviewed; `git diff --check` exited 0 and all 72 relative links in changed Markdown files resolved.
+
+## Scheduling usability — 2026-11-22
+
+Implemented [ADR-013](adr/013-scheduling-usability.md), extending F02/F12 and T15/T17. The overview reads all planned lesson pages before sorting by actual start instant across students and filtering Today/Tomorrow in teacher time. All retains unscheduled plans last. Settings exposes teacher timezone; a browser initializes an unset preference through the normal authenticated PATCH. The migration preserves legacy non-UTC or previously revised preferences, including UTC, while distinguishing new explicit UTC choices. Times use 24-hour notation and concise teacher/student labels; timezone selection uses search plus a native select rather than datalist suggestions. Required/invalid form fields receive visible markers and errors.
+
+Backend checks (isolated PostgreSQL 17.4, `DATABASE_URL=postgresql+psycopg://tutor:test-only@127.0.0.1:55439/tutor`, `PYTHONPATH=backend`, `UV_CACHE_DIR=/tmp/tutor-ux-uv-cache`):
+
+- `uv run python infra/ci-database.py prepare`: exit 0.
+- `uv run python -m app.migrate` twice: exit 0; head `0002_workspace_timezone`.
+- `uv run python infra/ci-database.py verify`: exit 0.
+- `SCHEDULING_INTEGRATION=1 uv run pytest`: exit 0, 50 passed / 9 skipped, three dependency deprecation warnings. Skips require `RUN_INTEGRATION` and are not completed full-stack coverage. Regression cases cover real migration of legacy values, initial preference state, explicit UTC persistence, invalid timezone rejection, idempotency replay and stale revisions.
+- `UV_CACHE_DIR=/tmp/tutor-ux-uv-cache uv run pytest` without integration opt-ins: exit 0, 44 passed / 15 skipped, three dependency warnings.
+
+Deployment checks:
+
+- `docker compose --env-file .env.example config --quiet`: exit 0.
+- `sh infra/smoke.sh`: exit 60 because the host did not trust the local Caddy CA. After copying the stack's public root certificate to `/tmp`, `CURL_CA_BUNDLE=/tmp/tutor-ux-caddy-root.crt sh infra/smoke.sh`: exit 0. This verifies existing-stack health, identity discovery and unauthenticated rejection, not deployment of this branch.
+
+No production deployment or image rebuild was performed. Full-stack tests requiring `RUN_INTEGRATION`, real mobile-device interaction, live Google changes, OAuth/client compatibility and restore checks were not rerun for this change. Existing CI runs the extended backend/scheduling and frontend regression suites and build. No lint/static-analysis tool is configured beyond TypeScript compilation.
+
+Frontend and review gates:
+
+- `npm test --prefix frontend`: exit 0, 36 tests across eight files. Coverage includes full lesson pagination, chronological/date filters across DST, compact 24-hour rendering, canonical native timezone choices, required timing markup, workspace initialization/conflict/retry, and required-answer validation while allowing draft saves.
+- `npm run build --prefix frontend`: exit 0; TypeScript and Vite production build, 1,579 modules transformed.
+- A temporary bundled component fixture in installed Chromium Headless Shell at 390×844 passed search/committed timezone separation, canonical Warsaw selection, Enter focus without submission, DST-gap invalid outline and blocked submission with focus, required asterisks, and correction to 18:30 followed by successful submission. This was a one-off browser check, not a new CI gate; fixture removed. Initial Vite listening/ordinary Chromium sandbox attempts were blocked or timed out; the standalone headless-shell alternative passed. Physical mobile hardware was not exercised.
+- UX agent reviewed the changed controls; developer review fixed implicit Enter submission, browser timezone alias normalization and invalid-field keyboard focus visibility. Existing Vitest/pytest commands wire deterministic regression coverage into CI without new dependencies.

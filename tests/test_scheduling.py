@@ -4,16 +4,22 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time, timezone
+from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from app.auth import Actor, authenticate
 from app.config import settings
-from app.db import Session
+from app.db import Session, engine
 from app.main import app
 from app.mcp import mcp
 from app.schemas import GenerateSchedule, Lesson, Schedule, Student
@@ -104,6 +110,43 @@ def test_schedule_mcp_and_openapi_share_the_route_schema():
     contract = app.openapi()
     assert contract['components']['schemas']['GenerateSchedule']['properties']['through_date']['format'] == 'date'
     assert '/api/v1/schedules/{schedule_id}/generate' in contract['paths']
+
+
+@postgres
+def test_timezone_migration_preserves_legacy_preferences():
+    config = Config()
+    config.set_main_option('script_location', str(Path(__file__).resolve().parents[1] / 'backend' / 'alembic'))
+    migration = ScriptDirectory.from_config(config).get_revision('0002_workspace_timezone').module
+    with engine.begin() as connection:
+        connection.execute(text('CREATE TEMP TABLE workspaces (timezone text, revision integer) ON COMMIT DROP'))
+        connection.execute(text("INSERT INTO workspaces VALUES ('UTC', 1), ('UTC', 2), ('Europe/Warsaw', 1)"))
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+        rows = connection.execute(text(
+            'SELECT timezone, revision, timezone_configured FROM workspaces ORDER BY timezone, revision',
+        )).all()
+        assert set(rows) == {('UTC', 1, False), ('UTC', 2, True), ('Europe/Warsaw', 1, True)}
+
+
+@postgres
+def test_workspace_timezone_distinguishes_default_from_saved_utc(client):
+    http, _ = client
+    path = '/api/v1/workspace'
+    initial = response(http.get(path))['data']
+    assert (initial['revision'], initial['timezone'], initial['timezone_configured']) == (1, 'UTC', False)
+
+    renamed = response(http.patch(path, headers=headers(1), json={'name': 'Renamed'}))['data']
+    assert (renamed['revision'], renamed['timezone_configured']) == (2, False)
+    assert http.patch(path, headers=headers(2), json={'timezone': 'Invalid/Timezone'}).status_code == 422
+
+    save_headers = headers(2)
+    saved = response(http.patch(path, headers=save_headers, json={'timezone': 'UTC'}))
+    assert (saved['revision'], saved['data']['timezone'], saved['data']['timezone_configured']) == (3, 'UTC', True)
+    assert response(http.patch(path, headers=save_headers, json={'timezone': 'UTC'})) == saved
+    assert http.patch(path, headers=headers(2), json={'timezone': 'Asia/Tokyo'}).status_code == 409
+
+    persisted = response(http.get(path))['data']
+    assert (persisted['timezone'], persisted['timezone_configured'], persisted['name']) == ('UTC', True, 'Renamed')
 
 
 @postgres

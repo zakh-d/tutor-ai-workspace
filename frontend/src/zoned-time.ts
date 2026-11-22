@@ -79,12 +79,27 @@ export function resolveDateTime(value: string, timeZone: string): string | null 
   return choices[0].instant;
 }
 
-export function formatZonedInstant(value: string, timeZone: string) {
-  return new Intl.DateTimeFormat(undefined, {
+export function endTimeError(start: string, end: string, zone: string) {
+  try {
+    const startsAt = resolveDateTime(start, zone);
+    const endsAt = resolveDateTime(end, zone);
+    if (startsAt && endsAt && Date.parse(endsAt) <= Date.parse(startsAt)) return "The end must follow the start.";
+  } catch {
+    // The individual fields report invalid or ambiguous times.
+  }
+}
+
+export function formatZonedDate(value: string, timeZone: string, locale?: string) {
+  return new Intl.DateTimeFormat(locale, {
     timeZone,
-    year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-    timeZoneName: "shortOffset",
+    year: "numeric", month: "short", day: "numeric",
   }).format(new Date(value));
+}
+
+export function shiftDate(day: string, count: number) {
+  const date = new Date(day + "T00:00:00Z");
+  date.setUTCDate(date.getUTCDate() + count);
+  return date.toISOString().slice(0, 10);
 }
 
 export function displayTimeValue(value: unknown): string {
