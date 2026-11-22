@@ -21,7 +21,7 @@ import {
 import { request, type RecordData, type Page } from "./api";
 import { initializeAuth, keycloak, authRedirectUri } from "./auth";
 import { canEditAssignment, firstUnansweredQuestion, requireAssignmentIdentity, requiresAnswer } from "./public-assignment";
-import { describeDue, formatStatus, lessonDays, lessonStart, loadLessonPlans, loadOpenTasks, selectLessonPlans, type LessonDay } from "./overview-data";
+import { describeDue, formatStatus, lessonDays, lessonStart, loadLessonPlans, loadOpenTasks, overviewPreviewLimit, previewRecords, selectLessonPlans, type LessonDay } from "./overview-data";
 import { RecordSummary, ContentPreview, SubmissionAnswers, readableValue } from "./record-display";
 import { SourceEditor } from "./source-editor";
 import { DateTimeField, RequiredMark, TeacherTimezone, TimezoneField, ZonedTime } from "./time-fields";
@@ -321,8 +321,8 @@ function Overview({ navigate, follow }: {
     page: { ...lessons.state.page, items: selectLessonPlans(lessons.state.page.items, day, now, teacherZone) },
   } : lessons.state;
   const students = useStudentTimezones([
-    ...(lessonPage && "page" in lessonPage ? lessonPage.page.items : []),
-    ...(tasks.state && "page" in tasks.state ? tasks.state.page.items.slice(0, 5) : []),
+    ...(lessonPage && "page" in lessonPage ? previewRecords(lessonPage.page.items, overviewPreviewLimit) : []),
+    ...(tasks.state && "page" in tasks.state ? previewRecords(tasks.state.page.items, overviewPreviewLimit) : []),
   ]);
   const date = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeZone: teacherZone }).format(now);
   const planLesson = () => navigate("Lessons", { type: "create" });
@@ -336,7 +336,7 @@ function Overview({ navigate, follow }: {
       <div className="overview-grid">
         <PreviewPanel title="Lesson plans" destination="Lessons" preview={{ ...lessons, state: lessonPage }}
           follow={follow} emptyTitle={day === "All" ? "No planned lessons" : `No planned lessons ${day.toLowerCase()}`}
-          emptyAction={planLesson} emptyActionLabel="Plan a lesson"
+          emptyAction={planLesson} emptyActionLabel="Plan a lesson" limit={overviewPreviewLimit}
           controls={<div className="lesson-day-filter" role="group" aria-label="Lesson day">
             {lessonDays.map(option => <button className="secondary" key={option} type="button"
               aria-pressed={day === option} onClick={() => setDay(option)}>{option}</button>)}
@@ -358,7 +358,7 @@ function Overview({ navigate, follow }: {
         <PreviewPanel title="My to-dos" destination="Tasks" preview={tasks}
           follow={follow} emptyTitle="No open to-dos"
           emptyDescription="Add a private reminder for your next step."
-          emptyAction={() => navigate("Tasks", { type: "create" })} emptyActionLabel="Add a to-do" limit={5}>
+          emptyAction={() => navigate("Tasks", { type: "create" })} emptyActionLabel="Add a to-do" limit={overviewPreviewLimit}>
           {(task) => {
             const due = describeDue(task.due_at, now, teacherZone);
             return (
@@ -380,7 +380,7 @@ function Overview({ navigate, follow }: {
   );
 }
 
-function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDescription, emptyAction, emptyActionLabel, children, controls, limit }: {
+export function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDescription, emptyAction, emptyActionLabel, children, controls, limit }: {
   title: string;
   destination: WorkspaceSection;
   preview: ReturnType<typeof usePreview>;
@@ -417,7 +417,7 @@ function PreviewPanel({ title, destination, preview, follow, emptyTitle, emptyDe
             <p className="preview-note">Preview · showing {Math.min(limit, state.page.items.length)} records</p>
           )}
           <ul className="preview-list">
-            {state.page.items.slice(0, limit).map((record) => <li key={record.id}>{children(record)}</li>)}
+            {previewRecords(state.page.items, limit).map((record) => <li key={record.id}>{children(record)}</li>)}
           </ul>
         </>
       ) : (

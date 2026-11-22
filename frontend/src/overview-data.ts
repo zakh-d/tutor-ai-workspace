@@ -87,3 +87,9 @@ export async function loadOpenTasks() {
   );
   return selectOpenTasks(pages);
 }
+
+export const overviewPreviewLimit = 5;
+
+export function previewRecords<T>(records: T[], limit?: number): T[] {
+  return limit === undefined ? records : records.slice(0, limit);
+}

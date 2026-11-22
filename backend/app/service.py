@@ -214,7 +214,9 @@ def validate_answers(content,answers,files,required=False):
         result[qid]=value
     for q in questions.values():
         value=result.get(q['id'])
-        if required and q['required']: require(value is not None and value!='' and value!=[],'validation_error','A required answer is missing.')
+        if required and q['required']:
+            present = bool(value.strip()) if isinstance(value, str) else value is not None and value != []
+            require(present, 'validation_error', 'A required answer is missing.')
     return result
 
 def score(content,answers):
