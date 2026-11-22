@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
+    app_version: str = 'dev'
     database_url: str = 'postgresql+psycopg://tutor:tutor@localhost:5432/tutor'
     keycloak_issuer: str = 'http://localhost:8081/realms/tutor'
     keycloak_jwks_url: str | None = None

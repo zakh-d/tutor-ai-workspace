@@ -82,6 +82,7 @@ def publish(env=os.environ):
                 '--tag', reference, '--metadata-file', str(metadata),
                 '--label', f'org.opencontainers.image.source=https://github.com/{repository}',
                 '--label', f'org.opencontainers.image.revision={sha}',
+                '--build-arg', f'APP_VERSION={tag}',
                 '--build-arg', f"VITE_KEYCLOAK_URL={env['VITE_KEYCLOAK_URL']}",
                 '--build-arg', f"VITE_KEYCLOAK_REALM={env['VITE_KEYCLOAK_REALM']}",
                 '--build-arg', f"VITE_KEYCLOAK_CLIENT_ID={env['VITE_KEYCLOAK_CLIENT_ID']}", '.')

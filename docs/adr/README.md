@@ -17,3 +17,4 @@ All records below are accepted for the documentation baseline dated 2026-11-14. 
 - [ADR-012 — Automatic semantic release tags](012-semantic-release-tags.md)
 
 - [ADR-013 — Teacher timezone preference and scheduling usability](013-scheduling-usability.md)
+- [ADR-014 — Application release visibility](014-application-version.md)

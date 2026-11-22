@@ -43,6 +43,7 @@ class PublishTests(unittest.TestCase):
         build = next(i for i, c in enumerate(calls) if c[:3] == ('docker', 'buildx', 'build'))
         tag = next(i for i, c in enumerate(calls) if c[:3] == ('git', 'tag', '-a'))
         self.assertLess(build, tag)
+        self.assertIn('APP_VERSION=v0.1.0', calls[build])
         self.assertIn(('git', 'push', 'origin', 'refs/tags/v0.1.0'), calls)
         self.assertIn(f'VITE_KEYCLOAK_URL={ENV["VITE_KEYCLOAK_URL"]}', calls[build])
 

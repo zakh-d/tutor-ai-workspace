@@ -140,3 +140,19 @@ Frontend and review gates:
 - `npm run build --prefix frontend`: exit 0; TypeScript and Vite production build, 1,579 modules transformed.
 - A temporary bundled component fixture in installed Chromium Headless Shell at 390×844 passed search/committed timezone separation, canonical Warsaw selection, Enter focus without submission, DST-gap invalid outline and blocked submission with focus, required asterisks, and correction to 18:30 followed by successful submission. This was a one-off browser check, not a new CI gate; fixture removed. Initial Vite listening/ordinary Chromium sandbox attempts were blocked or timed out; the standalone headless-shell alternative passed. Physical mobile hardware was not exercised.
 - UX agent reviewed the changed controls; developer review fixed implicit Enter submission, browser timezone alias normalization and invalid-field keyboard focus visibility. Existing Vitest/pytest commands wire deterministic regression coverage into CI without new dependencies.
+
+## Application release visibility — 2026-11-22
+
+[ADR-014](adr/014-application-version.md) propagates the existing CI semantic tag through Docker `APP_VERSION`, Vite's sidebar badge and Python's public version endpoint/OpenAPI metadata. This change starts from PR #1's head (`29db6fd`); its PR targets that branch to keep the diff version-only until #1 merges, then must target `main`.
+
+Executed checks:
+
+- `UV_CACHE_DIR=/tmp/tutor-version-uv uv run --frozen pytest -q` outside the sandbox: 46 passed, 15 skipped (PostgreSQL/provider integration flags absent), three dependency deprecation warnings. Initial default-cache run failed on the read-only uv cache; sandboxed TestClient runs stalled, so the completed run used approved execution outside the sandbox.
+- `python -m unittest discover -s infra/release -p 'test_*.py' -q`: 20 passed, including the semantic version build argument assertion.
+- `npm test --prefix frontend`: 38 passed. `VITE_APP_VERSION=v1.2.3 npm run build --prefix frontend`: passed TypeScript and Vite. The generated JavaScript contains `v1.2.3`.
+- `docker compose --env-file .env.example config --quiet`: exit 0.
+- `docker build --build-arg APP_VERSION=v1.2.3 -t tutor-version-check .`: exit 0; frozen production uv and npm dependency installation succeeded.
+- `docker run --rm --network none tutor-version-check python -c ...`: exit 0. The assertion script checked the image environment and bundled JavaScript, started Uvicorn, made unauthenticated HTTP requests to `/api/v1/version` and `/openapi.json`, and asserted both report `v1.2.3`. Startup polling was bounded to 100 attempts with one-second request timeouts; the process was terminated afterward.
+- `git diff --check`: passed. Relative Markdown link check across the six changed contract/decision/runbook documents: 95 resolved.
+
+No database schema or provider behavior changed. PostgreSQL integration, full identity/OAuth/provider/restore smoke, authenticated GHCR publication and visual browser inspection were not rerun. No configured Python lint/static-analysis gate exists; no lint coverage is claimed. Existing CI gates execute the new deterministic tests without extra dependencies.
