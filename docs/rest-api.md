@@ -77,3 +77,7 @@ Generation returns the standard mutation envelope; `data` contains the updated s
 Calendar event reads expose safe `lesson_id`/`student_id` associations when linked; `GET /calendar/events/{id}` reads a cached occurrence outside the current timetable range. The public assignment projection includes resolved `teacher_timezone` and `student_timezone` solely for deadline display.
 
 Browser initialization: when `timezone_configured` is false, the authenticated website saves its detected IANA timezone using the normal PATCH preconditions. A configured preference is never replaced automatically. Legacy non-UTC or revision-greater-than-one settings are preserved as configured; untouched UTC workspaces are initialized on next browser use. See [ADR-013](adr/013-scheduling-usability.md).
+
+## Application version
+
+`GET /api/v1/version` is unauthenticated and returns `200 {"version":"vMAJOR.MINOR.PATCH"}` for release images, or `{"version":"dev"}` for unversioned local builds. The value comes from `APP_VERSION` and requires no database, object storage or identity-provider access. Responses use `Cache-Control: no-store`. OpenAPI `info.version` captures the same setting at process startup.

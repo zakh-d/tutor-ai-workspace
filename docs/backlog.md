@@ -32,3 +32,5 @@ Container release implementation: [ADR-011](adr/011-container-release-pipeline.m
 [ADR-012](adr/012-semantic-release-tags.md) replaces commit-based primary release tags with automatic semantic versions. CI release checks include version bump policy, semantic image conflicts and out-of-order publication.
 
 Scheduling usability (P1, T15/T17): [ADR-013](adr/013-scheduling-usability.md) adds chronological overview day views, persisted browser-initialized teacher timezone, mobile timezone selection, 24-hour display and visible required-field errors. Existing application CI gates cover deterministic regressions; device/browser acceptance remains explicit.
+
+- Application release visibility: semantic CI tag propagated to frontend badge, backend version endpoint and OpenAPI metadata; see [ADR-014](adr/014-application-version.md).

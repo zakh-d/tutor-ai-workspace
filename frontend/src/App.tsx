@@ -30,6 +30,7 @@ import { effectiveStudentTimezone, useStudentTimezones } from "./student-timezon
 import { StudentSchedules } from "./student-schedules";
 import { readSection, sectionHref, type WorkspaceSection } from "./workspace-navigation";
 import { loadWorkspace } from "./workspace-timezone";
+import { VersionBadge } from "./version-badge";
 
 const navigationGroups = [
   {
@@ -254,6 +255,7 @@ function Workspace() {
             ))}
           </nav>
           <div className="rail-account">
+            <VersionBadge />
             <strong>{keycloak.tokenParsed?.preferred_username ?? "Tutor"}</strong>
             <button type="button" className="text-button" onClick={signOut}>
               <LogOut size={17} aria-hidden="true" />Sign out

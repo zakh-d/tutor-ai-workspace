@@ -18,7 +18,7 @@ async def lifespan(app):
     async with http_app.lifespan(app):
         yield
 
-app=FastAPI(title='AI tutor workspace',version='0.1.0',lifespan=lifespan)
+app=FastAPI(title='AI tutor workspace',version=settings().app_version,lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=settings().cors_origins.split(','),allow_credentials=True,allow_methods=['GET','POST','PATCH','PUT'],allow_headers=['Authorization','Content-Type','Idempotency-Key','If-Match','X-CSRF-Token'])
 @app.exception_handler(DomainError)
 async def domain_error(request,exc):
@@ -37,6 +37,10 @@ async def security_headers(request:Request,call_next):
         response.headers['X-Robots-Tag']='noindex, nofollow'
         response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'" if request.url.path.startswith('/a/') else "default-src 'none'; frame-ancestors 'none'"
     return response
+@app.get('/api/v1/version')
+def version() -> dict[str, str]:
+    return {'version': settings().app_version}
+
 @app.get('/health/live')
 def live():return {'status':'ok'}
 @app.get('/health/ready')
