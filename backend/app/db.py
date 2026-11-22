@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from uuid import uuid4
-from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKeyConstraint, UniqueConstraint, Index, BigInteger, Text
+from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKeyConstraint, UniqueConstraint, Index, BigInteger, Text, false
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from .config import settings
@@ -15,6 +15,7 @@ class Workspace(Base):
     subject: Mapped[str]=mapped_column(Text)
     name: Mapped[str]=mapped_column(String(200),default='My workspace')
     timezone: Mapped[str]=mapped_column(String(100),default='UTC')
+    timezone_configured: Mapped[bool]=mapped_column(server_default=false())
     revision: Mapped[int]=mapped_column(default=1)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
     __table_args__=(UniqueConstraint('issuer','subject'),)

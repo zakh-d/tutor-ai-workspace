@@ -1,9 +1,9 @@
-import { useContext, useEffect, useState, type FormEvent } from "react";
+import { useContext, useEffect, useId, useState, type FormEvent } from "react";
 import { request, type Page, type RecordData } from "./api";
 import { formatStatus } from "./overview-data";
 import { effectiveStudentTimezone } from "./student-timezones";
-import { TeacherTimezone, TimezoneField, ZonedTime } from "./time-fields";
-import { isTimeZone, plainDateInZone, wallTimeChoices } from "./zoned-time";
+import { RequiredMark, TeacherTimezone, TimeInput, TimezoneField, ZonedTime } from "./time-fields";
+import { isTimeZone, plainDateInZone, shiftDate, wallTimeChoices } from "./zoned-time";
 
 const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -24,27 +24,21 @@ type Generation = Schedule & {
   skipped_occurrences: { occurrence_date: string; reason: "ambiguous_local_time" | "nonexistent_local_time" }[];
 };
 
-export function addCalendarDays(day: string, count: number) {
-  const date = new Date(day + "T00:00:00Z");
-  date.setUTCDate(date.getUTCDate() + count);
-  return date.toISOString().slice(0, 10);
-}
-
 export function generationWindow(schedule: Pick<Schedule, "start_date" | "end_date" | "generated_through">) {
   const minimum = schedule.generated_through && schedule.generated_through >= schedule.start_date
-    ? addCalendarDays(schedule.generated_through, 1) : schedule.start_date;
-  const limit = addCalendarDays(minimum, 92);
+    ? shiftDate(schedule.generated_through, 1) : schedule.start_date;
+  const limit = shiftDate(minimum, 92);
   const maximum = schedule.end_date && schedule.end_date < limit ? schedule.end_date : limit;
   return { minimum, maximum };
 }
 
 function firstOccurrence(rule: Rule) {
-  if (!rule.start_date || !rule.weekdays.length || !rule.local_start || !isTimeZone(rule.timezone)) return;
+  if (!rule.start_date || !rule.weekdays.length || !/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(rule.local_start) || !isTimeZone(rule.timezone)) return;
   const start = new Date(rule.start_date + "T00:00:00Z");
   if (!Number.isFinite(start.getTime())) return;
   const weekday = (start.getUTCDay() + 6) % 7;
   const offset = Math.min(...rule.weekdays.map(day => (day - weekday + 7) % 7));
-  const date = addCalendarDays(rule.start_date, offset);
+  const date = shiftDate(rule.start_date, offset);
   return rule.end_date && date > rule.end_date ? undefined : date;
 }
 
@@ -153,14 +147,21 @@ function ScheduleForm({ student, existing, studentZone, saved, close }: {
   }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [validateWeekdays, setValidateWeekdays] = useState(false);
+  const weekdaysError = validateWeekdays && !draft.weekdays.length;
+  const weekdaysId = useId();
   const previewDate = firstOccurrence(draft);
   const preview = previewDate ? wallTimeChoices(`${previewDate}T${draft.local_start}`, draft.timezone) : [];
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
+    if (!draft.weekdays.length) {
+      setValidateWeekdays(true);
+      (event.currentTarget as HTMLFormElement).querySelector<HTMLInputElement>(".schedule-weekdays input")?.focus();
+      return;
+    }
     setBusy(true);
     try {
-      if (!draft.weekdays.length) throw new Error("Choose at least one weekday.");
       if (!isTimeZone(draft.timezone)) throw new Error("Choose a valid IANA timezone.");
       const { data } = await request<{ data: Schedule }>(existing ? `/schedules/${existing.id}` : "/schedules", {
         method: existing ? "PATCH" : "POST", revision: existing?.revision, body: draft,
@@ -176,27 +177,29 @@ function ScheduleForm({ student, existing, studentZone, saved, close }: {
     <form className="question-editor schedule-form" onSubmit={submit}>
       <h4>{existing ? "Edit recurring schedule" : "New recurring schedule"}</h4>
       <fieldset className="editor-fields" disabled={busy}>
-        <label>Lesson title
+        <label><span>Lesson title<RequiredMark /></span>
           <input required maxLength={200} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} />
         </label>
-        <fieldset className="schedule-weekdays">
-          <legend>Weekdays</legend>
+        <fieldset className="schedule-weekdays" aria-invalid={weekdaysError || undefined}
+          aria-describedby={weekdaysError ? weekdaysId : undefined}>
+          <legend>Weekdays<RequiredMark /><span className="sr-only"> (required)</span></legend>
           {weekdays.map((day, index) => <label key={day} className="archive-filter">
             <input type="checkbox" checked={draft.weekdays.includes(index)} onChange={event => setDraft({
               ...draft, weekdays: event.target.checked ? [...draft.weekdays, index].sort((a, b) => a - b) :
                 draft.weekdays.filter(value => value !== index),
             })} /> {day}
           </label>)}
+          {weekdaysError && <small className="field-error" id={weekdaysId} role="alert">Choose at least one weekday.</small>}
         </fieldset>
         <TimezoneField label="Schedule timezone" value={draft.timezone} onChange={timezone => setDraft({ ...draft, timezone })} required />
-        <label>Start time ({draft.timezone || "schedule timezone"})
-          <input type="time" required value={draft.local_start} onChange={event => setDraft({ ...draft, local_start: event.target.value })} />
+        <label><span>Start time (24-hour)<RequiredMark /></span>
+          <TimeInput required value={draft.local_start} onChange={local_start => setDraft({ ...draft, local_start })} />
         </label>
-        <label>Duration in minutes
+        <label><span>Duration in minutes<RequiredMark /></span>
           <input type="number" min={1} max={1440} required value={draft.duration_minutes || ""}
             onChange={event => setDraft({ ...draft, duration_minutes: Number(event.target.value) })} />
         </label>
-        <label>First date
+        <label><span>First date<RequiredMark /></span>
           <input type="date" required value={draft.start_date} onChange={event => setDraft({ ...draft, start_date: event.target.value })} />
         </label>
         <label>Last date (optional)
@@ -267,7 +270,7 @@ function ScheduleCard({ schedule, studentZone, disabled, edit, openLesson, saved
       </p>}
       {schedule.generated_through && <p>Generated through {schedule.generated_through}</p>}
       {canGenerate && <form onSubmit={generate}>
-        <label>Generate through
+        <label><span>Generate through<RequiredMark /></span>
           <input type="date" min={minimum} max={maximum} required value={through} disabled={busy}
             onChange={event => setThrough(event.target.value)} />
           <small>{minimum === maximum ? minimum : `${minimum} to ${maximum}`}</small>

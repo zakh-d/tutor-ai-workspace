@@ -4,16 +4,22 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time, timezone
+from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from app.auth import Actor, authenticate
 from app.config import settings
-from app.db import Session
+from app.db import Session, engine
 from app.main import app
 from app.mcp import mcp
 from app.schemas import GenerateSchedule, Lesson, Schedule, Student
@@ -104,6 +110,43 @@ def test_schedule_mcp_and_openapi_share_the_route_schema():
     contract = app.openapi()
     assert contract['components']['schemas']['GenerateSchedule']['properties']['through_date']['format'] == 'date'
     assert '/api/v1/schedules/{schedule_id}/generate' in contract['paths']
+
+
+@postgres
+def test_timezone_migration_preserves_legacy_preferences():
+    config = Config()
+    config.set_main_option('script_location', str(Path(__file__).resolve().parents[1] / 'backend' / 'alembic'))
+    migration = ScriptDirectory.from_config(config).get_revision('0002_workspace_timezone').module
+    with engine.begin() as connection:
+        connection.execute(text('CREATE TEMP TABLE workspaces (timezone text, revision integer) ON COMMIT DROP'))
+        connection.execute(text("INSERT INTO workspaces VALUES ('UTC', 1), ('UTC', 2), ('Europe/Warsaw', 1)"))
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+        rows = connection.execute(text(
+            'SELECT timezone, revision, timezone_configured FROM workspaces ORDER BY timezone, revision',
+        )).all()
+        assert set(rows) == {('UTC', 1, False), ('UTC', 2, True), ('Europe/Warsaw', 1, True)}
+
+
+@postgres
+def test_workspace_timezone_distinguishes_default_from_saved_utc(client):
+    http, _ = client
+    path = '/api/v1/workspace'
+    initial = response(http.get(path))['data']
+    assert (initial['revision'], initial['timezone'], initial['timezone_configured']) == (1, 'UTC', False)
+
+    renamed = response(http.patch(path, headers=headers(1), json={'name': 'Renamed'}))['data']
+    assert (renamed['revision'], renamed['timezone_configured']) == (2, False)
+    assert http.patch(path, headers=headers(2), json={'timezone': 'Invalid/Timezone'}).status_code == 422
+
+    save_headers = headers(2)
+    saved = response(http.patch(path, headers=save_headers, json={'timezone': 'UTC'}))
+    assert (saved['revision'], saved['data']['timezone'], saved['data']['timezone_configured']) == (3, 'UTC', True)
+    assert response(http.patch(path, headers=save_headers, json={'timezone': 'UTC'})) == saved
+    assert http.patch(path, headers=headers(2), json={'timezone': 'Asia/Tokyo'}).status_code == 409
+
+    persisted = response(http.get(path))['data']
+    assert (persisted['timezone'], persisted['timezone_configured'], persisted['name']) == ('UTC', True, 'Renamed')
 
 
 @postgres
@@ -295,3 +338,45 @@ def test_public_assignment_has_only_resolved_zone_names_from_the_profiles(client
         http.cookies.set('tutor_assignment', http.cookies.get('tutor_assignment'))
     public = response(http.get('/public/v1/assignment'))
     assert (public['teacher_timezone'], public['student_timezone']) == ('America/New_York', 'Asia/Tokyo')
+
+
+@postgres
+@pytest.mark.parametrize('blank', [' \t\n', '\u00a0'])
+def test_public_submit_rejects_blank_required_written_response(client, blank):
+    from fastapi.testclient import TestClient
+    from contextlib import closing
+    # The session fixture already runs the application's single-use MCP lifespan.
+    with closing(TestClient(app, base_url='https://testserver')) as c:
+        student = c.post('/api/v1/students', json={'display_name': 'Written response'}, headers=headers())
+        assert student.status_code == 201, student.text
+        qid = str(uuid4())
+        template = c.post('/api/v1/homework-templates', headers=headers(), json={
+            'title': 'Required writing', 'instructions': 'Write a response', 'questions': [{
+                'id': qid, 'type': 'written_response', 'prompt': 'Explain', 'required': True,
+                'points': 1, 'max_chars': 100, 'rubric': 'Clear response',
+            }],
+        })
+        assert template.status_code == 201, template.text
+        published = c.post(f"/api/v1/homework-templates/{template.json()['data']['id']}/publish",
+                           json={'student_id': student.json()['data']['id']}, headers=headers(1))
+        assert published.status_code == 201, published.text
+        assignment = published.json()['data']
+        origin = {'Origin': settings().public_base_url}
+        exchange = c.post(f"/public/v1/assignments/{assignment['id']}/session",
+                          json={'token': assignment['access_link'].split('#')[1]}, headers=origin)
+        assert exchange.status_code == 200, exchange.text
+        public_headers = {**origin, 'X-CSRF-Token': exchange.json()['csrf_token']}
+        saved = c.patch('/public/v1/attempt', json={'answers': [{'question_id': qid, 'value': blank}]},
+                        headers={**public_headers, **headers(1)})
+        assert saved.status_code == 200, saved.text
+        submitted = c.post('/public/v1/attempt/submit', headers={**public_headers, **headers(2)})
+        assert submitted.status_code == 422, submitted.text
+        assert submitted.json()['error']['code'] == 'validation_error'
+        draft = c.get('/public/v1/assignment').json()
+        assert draft['attempt']['status'] == 'draft'
+        assert draft['attempt']['revision'] == 2
+        saved = c.patch('/public/v1/attempt', json={'answers': [{'question_id': qid, 'value': '  Valid response\n'}]},
+                        headers={**public_headers, **headers(2)})
+        assert saved.status_code == 200, saved.text
+        submitted = c.post('/public/v1/attempt/submit', headers={**public_headers, **headers(3)})
+        assert submitted.status_code == 200, submitted.text

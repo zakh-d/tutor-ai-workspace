@@ -100,3 +100,22 @@ def test_native_sandbox_converts_pptx():
     slide.shapes.title.text='Native slide conversion works.'
     raw=io.BytesIO();deck.save(raw)
     assert 'Native slide conversion works.' in extract(raw.getvalue(),'fixture.pptx')
+
+
+@pytest.mark.parametrize('value', ['', ' ', '\t\n', '\u00a0'])
+def test_required_written_response_rejects_blank_only_on_submission(value):
+    q = {'id': str(uuid4()), 'type': 'written_response', 'required': True, 'max_chars': 100}
+    content = {'questions': [q]}
+    answers = [{'question_id': q['id'], 'value': value}]
+    assert validate_answers(content, answers, {}, required=False) == {q['id']: value}
+    with pytest.raises(DomainError) as error:
+        validate_answers(content, answers, {}, required=True)
+    assert error.value.code == 'validation_error'
+    q['required'] = False
+    assert validate_answers(content, answers, {}, required=True) == {q['id']: value}
+
+
+def test_required_written_response_preserves_nonblank_content():
+    q = {'id': str(uuid4()), 'type': 'written_response', 'required': True, 'max_chars': 100}
+    value = '  Answer\n'
+    assert validate_answers({'questions': [q]}, [{'question_id': q['id'], 'value': value}], {}, required=True) == {q['id']: value}
